@@ -115,7 +115,7 @@ void loop() {
   Serial.println(data);
 
 
-  Udp.beginPacket("192.168.1.6", localPort);
+  Udp.beginPacket("IP Address", localPort); //Include IP here
   Udp.write(data.c_str());
   Udp.endPacket();
 
