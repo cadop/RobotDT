@@ -29,16 +29,9 @@ The directory structure of the project is as follows:
 - **Scene/USD file**: The main scene file for simulations.
 - **Scene/Collected_assets/**: Directory for storing all the assets collected for the scene.
 
-### Robot Directory
-- **Robot/Fusion_360.f3d**: The Fusion 360 file for the robot design.
-- **Robot/URDF/**: Contains the URDF files and meshes for the robot.
-  - **Robot/URDF/meshes/**: Directory for storing mesh files.
-  - **Robot/URDF/.urdf**: The URDF file for the robot.
+### URDF.zip Directory
+- **URDF\Fusion Description\meshes**: Collision Meshes of Robot Arm.
+- **URDF\Fusion Description\urdf**: URDF file of the Robot Arm.
 
-## Instructions
 
-### Python Script
-1. Ensure Python is installed on your system.
-2. Run the script using the following command:
-   ```bash
-   python python_script.py
+
