@@ -4,16 +4,17 @@ This project involves integrates a physical robot into omniverse using arduino s
 The directory structure of the project is as follows:
 
 - `readme.md`
-- `python_script.py`
+- `behavior_script.py`
 - `arduino/`
-  - `.ino` file (put blank password and wifi info!)
-  - `arduino_instructions.md`
+  - `RobotArmPotSender.ino` file (put blank password and wifi info!)
 - `Scene/`
   - `USD file`
   - `Collected_assets/`
 - `Robot/`\
   - `robot_fritzing.png` (Wiring Diagram of Setup)
   - `Fusion_360.f3d`
+  - `Demo Flour Bucket.f3d` 
+  - `Arm ASM and Shovel.zip` (Assembly with Joint limitations and Shovel)
   - `URDF/`
     - `meshes/`
     - `.urdf`
@@ -22,11 +23,10 @@ The directory structure of the project is as follows:
 
 ### Root Directory
 - **readme.md**: This file.
-- **python_script.py**: Contains the main Python script for the project.
+- **behavior_script.py**: Behavoir Script that provides the scene with Joint Position Updates.
 
 ### Arduino Directory
-- **arduino/.ino file**: The Arduino sketch file. Ensure to fill in your WiFi details and password.
-- **arduino/arduino_instructions.md**: Detailed instructions for setting up and using the Arduino code.
+- **RobotArmPotSender/.ino file**: The Arduino sketch file. Ensure to fill in your WiFi details and password.
 
 ### Scene Directory
 - **Scene/USD file**: The main scene file for simulations.
