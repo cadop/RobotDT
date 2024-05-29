@@ -10,9 +10,7 @@ The directory structure of the project is as follows:
 - `Fusion360/`
   - `Arm ASM and Shovel.zip`
   - `Demo Flour Bucket.f3d`
-- `URDF/`
-    - `meshes/`
-    - `.urdf`
+- `URDF.zip`
 - `Scene/`
   - `USD file`
   - `Collected_assets/`
