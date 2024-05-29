@@ -1,6 +1,7 @@
 #RobotDT
 ## Overview
-This project involves integrating various components including Python scripts, Arduino code, simulation scenes, and a robot design. The directory structure of the project is as follows:
+This project involves integrates a physical robot into omniverse using arduino sketches, python scripting and a scene setup in omniverse.
+The directory structure of the project is as follows:
 
 - `readme.md`
 - `python_script.py`
