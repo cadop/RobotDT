@@ -7,31 +7,17 @@ The directory structure of the project is as follows:
 - `README.md`
 - `behavior_script.py`
 - `robot_fritzing.png`
-- `Arduino/`
-  - `arduino_data_send/`
-    - `arduino_data_send.ino`
 - `Fusion360/`
   - `Arm ASM and Shovel.zip`
   - `Demo Flour Bucket.f3d`
 - `URDF/`
     - `meshes/`
     - `.urdf`
-
-- `readme.md`
-- `behavior_script.py`
-- `arduino/`
-  - `arduino_data_send.ino` file (put blank password and wifi info!)
 - `Scene/`
   - `USD file`
   - `Collected_assets/`
-- `Robot/`
-  - `robot_fritzing.png` (Wiring Diagram of Setup)
-  - `Demo Flour Bucket.f3d` 
-  - `Arm ASM and Shovel.zip` (Assembly with Joint limitations and Shovel)
-  - `URDF/`
-    - `meshes/`
-    - `.urdf`
-
+- `robot_fritzing.png` (Wiring Diagram of Setup)
+  
 ## Directory Structure
 
 ### Root Directory
