@@ -10,7 +10,7 @@ The directory structure of the project is as follows:
 - `Scene/`
   - `USD file`
   - `Collected_assets/`
-- `Robot/`\
+- `Robot/`
   - `robot_fritzing.png` (Wiring Diagram of Setup)
   - `Fusion_360.f3d`
   - `Demo Flour Bucket.f3d` 
