@@ -1,6 +1,7 @@
 #RobotDT 
 ## Overview 
-#We are working on organizing and uploding all files and instructions!!
+## We are working on organizing and uploding all files and instructions!!
+
 This project involves integrates a physical robot into omniverse using arduino sketches, python scripting and a scene setup in omniverse.
 The directory structure of the project is as follows:
 
