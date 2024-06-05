@@ -1,0 +1,1099 @@
+#usda 1.0
+(
+    customLayerData = {
+        dictionary audioSettings = {
+            double dopplerLimit = 2
+            double dopplerScale = 1
+            token enableDistanceDelay = "off"
+            token enableDoppler = "off"
+            double nonSpatialTimeScale = 1
+            double spatialTimeScale = 1
+            double speedOfSound = 340
+        }
+        dictionary cameraSettings = {
+            dictionary Front = {
+                double3 position = (0, 0, 50000)
+                double radius = 500
+                double3 target = (0, 0, 0)
+            }
+            dictionary Perspective = {
+                double3 position = (1481.490707433716, 986.6928746882588, 1510.1746680713693)
+                double radius = 2600.4117817153274
+                double3 target = (-225.67351192128353, -280.1197876642318, 12.537381829699143)
+            }
+            dictionary Right = {
+                double3 position = (-50000, 0, -1.1102230246251565e-11)
+                double radius = 500
+                double3 target = (0, 0, 0)
+            }
+            dictionary Top = {
+                double3 position = (-8.326672684688674e-12, 50000, 5.551115123125783e-12)
+                double radius = 500
+                double3 target = (0, 0, 0)
+            }
+            string boundCamera = "/OmniverseKit_Persp"
+        }
+        dictionary renderSettings = {
+        }
+    }
+    defaultPrim = "World"
+    endTimeCode = 100
+    metersPerUnit = 0.009999999776482582
+    startTimeCode = 0
+    timeCodesPerSecond = 24
+    upAxis = "Z"
+)
+
+def Xform "World"
+{
+    def Cube "Cube"
+    {
+        float3[] extent = [(-50, -50, -50), (50, 50, 50)]
+        rel material:binding = </World/Looks/FloorMat> (
+            bindMaterialAs = "strongerThanDescendants"
+        )
+        double size = 100
+        double3 xformOp:rotateZYX = (0, 0, 0)
+        double3 xformOp:scale = (10, 20, 1)
+        double3 xformOp:translate = (0, 0, -49.5)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+    }
+
+    def Scope "Looks"
+    {
+        def Material "Metal_01"
+        {
+            float inputs:metallic_constant = 1 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Metal_01/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Metal_01/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Metal_01/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                float inputs:metallic_constant.connect = </World/Looks/Metal_01.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Metal_01.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Metal_02"
+        {
+            float inputs:metallic_constant = 1 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0.05 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Metal_02/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Metal_02/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Metal_02/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                float inputs:metallic_constant.connect = </World/Looks/Metal_02.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Metal_02.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Metal_03"
+        {
+            float inputs:metallic_constant = 1 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0.15 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Metal_03/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Metal_03/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Metal_03/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                float inputs:metallic_constant.connect = </World/Looks/Metal_03.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Metal_03.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Metal_04"
+        {
+            float inputs:metallic_constant = 1 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0.2 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Metal_04/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Metal_04/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Metal_04/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                float inputs:metallic_constant.connect = </World/Looks/Metal_04.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Metal_04.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Metal_05"
+        {
+            float inputs:metallic_constant = 1 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0.35 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Metal_05/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Metal_05/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Metal_05/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                float inputs:metallic_constant.connect = </World/Looks/Metal_05.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Metal_05.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Metal_06"
+        {
+            float inputs:metallic_constant = 1 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0.5 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Metal_06/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Metal_06/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Metal_06/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                float inputs:metallic_constant.connect = </World/Looks/Metal_06.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Metal_06.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Metal_07"
+        {
+            color3f inputs:diffuse_color_constant = (0.8, 0.8, 0.8) (
+                customData = {
+                    float3 default = (0.2, 0.2, 0.2)
+                    dictionary range = {
+                        float3 max = (100000, 100000, 100000)
+                        float3 min = (0, 0, 0)
+                    }
+                }
+                displayGroup = "Albedo"
+                displayName = "Base Color"
+            )
+            float inputs:metallic_constant = 1 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Metal_07/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Metal_07/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Metal_07/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                color3f inputs:diffuse_color_constant.connect = </World/Looks/Metal_07.inputs:diffuse_color_constant>
+                float inputs:metallic_constant.connect = </World/Looks/Metal_07.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Metal_07.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Metal_08"
+        {
+            color3f inputs:diffuse_color_constant = (0.3, 0.3, 0.3) (
+                customData = {
+                    float3 default = (0.2, 0.2, 0.2)
+                    dictionary range = {
+                        float3 max = (100000, 100000, 100000)
+                        float3 min = (0, 0, 0)
+                    }
+                }
+                displayGroup = "Albedo"
+                displayName = "Base Color"
+            )
+            float inputs:metallic_constant = 1 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Metal_08/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Metal_08/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Metal_08/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                color3f inputs:diffuse_color_constant.connect = </World/Looks/Metal_08.inputs:diffuse_color_constant>
+                float inputs:metallic_constant.connect = </World/Looks/Metal_08.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Metal_08.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Metal_09"
+        {
+            color3f inputs:diffuse_color_constant = (0.05, 0.05, 0.05) (
+                customData = {
+                    float3 default = (0.2, 0.2, 0.2)
+                    dictionary range = {
+                        float3 max = (100000, 100000, 100000)
+                        float3 min = (0, 0, 0)
+                    }
+                }
+                displayGroup = "Albedo"
+                displayName = "Base Color"
+            )
+            float inputs:metallic_constant = 1 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Metal_09/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Metal_09/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Metal_09/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                color3f inputs:diffuse_color_constant.connect = </World/Looks/Metal_09.inputs:diffuse_color_constant>
+                float inputs:metallic_constant.connect = </World/Looks/Metal_09.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Metal_09.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Plastic_01"
+        {
+            color3f inputs:diffuse_color_constant = (0.5, 0.5, 0.5) (
+                customData = {
+                    float3 default = (0.2, 0.2, 0.2)
+                    dictionary range = {
+                        float3 max = (100000, 100000, 100000)
+                        float3 min = (0, 0, 0)
+                    }
+                }
+                displayGroup = "Albedo"
+                displayName = "Base Color"
+            )
+            float inputs:metallic_constant = 0 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Plastic_01/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Plastic_01/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Plastic_01/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                color3f inputs:diffuse_color_constant.connect = </World/Looks/Plastic_01.inputs:diffuse_color_constant>
+                float inputs:metallic_constant.connect = </World/Looks/Plastic_01.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Plastic_01.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Plastic_02"
+        {
+            color3f inputs:diffuse_color_constant = (0.18, 0.18, 0.18) (
+                customData = {
+                    float3 default = (0.2, 0.2, 0.2)
+                    dictionary range = {
+                        float3 max = (100000, 100000, 100000)
+                        float3 min = (0, 0, 0)
+                    }
+                }
+                displayGroup = "Albedo"
+                displayName = "Base Color"
+            )
+            float inputs:metallic_constant = 0 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Plastic_02/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Plastic_02/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Plastic_02/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                color3f inputs:diffuse_color_constant.connect = </World/Looks/Plastic_02.inputs:diffuse_color_constant>
+                float inputs:metallic_constant.connect = </World/Looks/Plastic_02.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Plastic_02.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Plastic_03"
+        {
+            color3f inputs:diffuse_color_constant = (0.03, 0.03, 0.03) (
+                customData = {
+                    float3 default = (0.2, 0.2, 0.2)
+                    dictionary range = {
+                        float3 max = (100000, 100000, 100000)
+                        float3 min = (0, 0, 0)
+                    }
+                }
+                displayGroup = "Albedo"
+                displayName = "Base Color"
+            )
+            float inputs:metallic_constant = 0 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Plastic_03/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Plastic_03/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Plastic_03/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                color3f inputs:diffuse_color_constant.connect = </World/Looks/Plastic_03.inputs:diffuse_color_constant>
+                float inputs:metallic_constant.connect = </World/Looks/Plastic_03.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Plastic_03.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Plastic_04"
+        {
+            color3f inputs:diffuse_color_constant = (0.1, 0.1, 0.1) (
+                customData = {
+                    float3 default = (0.2, 0.2, 0.2)
+                    dictionary range = {
+                        float3 max = (100000, 100000, 100000)
+                        float3 min = (0, 0, 0)
+                    }
+                }
+                displayGroup = "Albedo"
+                displayName = "Base Color"
+            )
+            float inputs:metallic_constant = 0 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Plastic_04/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Plastic_04/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Plastic_04/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                color3f inputs:diffuse_color_constant.connect = </World/Looks/Plastic_04.inputs:diffuse_color_constant>
+                float inputs:metallic_constant.connect = </World/Looks/Plastic_04.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Plastic_04.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Plastic_05"
+        {
+            color3f inputs:diffuse_color_constant = (0.1, 0.1, 0.1) (
+                customData = {
+                    float3 default = (0.2, 0.2, 0.2)
+                    dictionary range = {
+                        float3 max = (100000, 100000, 100000)
+                        float3 min = (0, 0, 0)
+                    }
+                }
+                displayGroup = "Albedo"
+                displayName = "Base Color"
+            )
+            float inputs:metallic_constant = 0 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0.25 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Plastic_05/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Plastic_05/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Plastic_05/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                color3f inputs:diffuse_color_constant.connect = </World/Looks/Plastic_05.inputs:diffuse_color_constant>
+                float inputs:metallic_constant.connect = </World/Looks/Plastic_05.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Plastic_05.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "Plastic_06"
+        {
+            color3f inputs:diffuse_color_constant = (0.1, 0.1, 0.1) (
+                customData = {
+                    float3 default = (0.2, 0.2, 0.2)
+                    dictionary range = {
+                        float3 max = (100000, 100000, 100000)
+                        float3 min = (0, 0, 0)
+                    }
+                }
+                displayGroup = "Albedo"
+                displayName = "Base Color"
+            )
+            float inputs:metallic_constant = 0 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0.6 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/Plastic_06/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/Plastic_06/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/Plastic_06/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                color3f inputs:diffuse_color_constant.connect = </World/Looks/Plastic_06.inputs:diffuse_color_constant>
+                float inputs:metallic_constant.connect = </World/Looks/Plastic_06.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/Plastic_06.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+
+        def Material "FloorMat"
+        {
+            color3f inputs:diffuse_color_constant = (0.1, 0.1, 0.1) (
+                customData = {
+                    float3 default = (0.2, 0.2, 0.2)
+                    dictionary range = {
+                        float3 max = (100000, 100000, 100000)
+                        float3 min = (0, 0, 0)
+                    }
+                }
+                displayGroup = "Albedo"
+                displayName = "Base Color"
+            )
+            float inputs:metallic_constant = 0 (
+                customData = {
+                    float default = 0
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Metallic Amount"
+            )
+            float inputs:reflection_roughness_constant = 0.6 (
+                customData = {
+                    float default = 0.5
+                    dictionary range = {
+                        float max = 1
+                        float min = 0
+                    }
+                }
+                displayGroup = "Reflectivity"
+                displayName = "Roughness Amount"
+            )
+            token outputs:mdl:displacement.connect = </World/Looks/FloorMat/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/FloorMat/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/FloorMat/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @OmniPBR.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "OmniPBR"
+                color3f inputs:diffuse_color_constant.connect = </World/Looks/FloorMat.inputs:diffuse_color_constant>
+                float inputs:metallic_constant.connect = </World/Looks/FloorMat.inputs:metallic_constant>
+                float inputs:reflection_roughness_constant.connect = </World/Looks/FloorMat.inputs:reflection_roughness_constant>
+                token outputs:out
+            }
+        }
+    }
+
+    def Xform "MetalBalls" (
+        kind = "model"
+    )
+    {
+        float3 xformOp:rotateZYX = (-0, 0, -0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0, 300, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+        def "uvsphere_01" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            rel material:binding = </World/Looks/Metal_01> (
+                bindMaterialAs = "weakerThanDescendants"
+            )
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (-300, 0, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_02" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Metal_02> (
+                    bindMaterialAs = "weakerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_03" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (300, 0, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Metal_03> (
+                    bindMaterialAs = "weakerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_04" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (-300, 300, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Metal_04> (
+                    bindMaterialAs = "weakerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_05" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 300, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Metal_05> (
+                    bindMaterialAs = "weakerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_06" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (300, 300, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Metal_06> (
+                    bindMaterialAs = "weakerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_07" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (-300, 600, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Metal_07> (
+                    bindMaterialAs = "weakerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_08" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 600, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Metal_08> (
+                    bindMaterialAs = "weakerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_09" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (300, 600, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Metal_09> (
+                    bindMaterialAs = "weakerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+    }
+
+    def Xform "PlasticBalls" (
+        kind = "model"
+    )
+    {
+        float3 xformOp:rotateZYX = (-0, 0, -0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0, -600, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+        def "uvsphere_01" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            rel material:binding = </World/Looks/Plastic_01> (
+                bindMaterialAs = "strongerThanDescendants"
+            )
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (-300, 0, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_02" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 0, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Plastic_02> (
+                    bindMaterialAs = "strongerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_03" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (300, 0, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Plastic_03> (
+                    bindMaterialAs = "strongerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_04" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (-300, 300, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Plastic_04> (
+                    bindMaterialAs = "strongerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_05" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (0, 300, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Plastic_05> (
+                    bindMaterialAs = "strongerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+
+        def "uvsphere_06" (
+            prepend references = @./uvsphere.usd@
+        )
+        {
+            float3 xformOp:rotateZYX = (-0, 0, -0)
+            float3 xformOp:scale = (1, 1, 1)
+            double3 xformOp:translate = (300, 300, 100)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+
+            over "Sphere"
+            {
+                rel material:binding = </World/Looks/Plastic_06> (
+                    bindMaterialAs = "strongerThanDescendants"
+                )
+                matrix4d xformOp:transform = ( (100, 0, 0, 0), (0, 100.00000000000132, 0, 0), (0, 0, 100.00000000000132, 0), (0, 0, 0, 1) )
+            }
+        }
+    }
+}
+

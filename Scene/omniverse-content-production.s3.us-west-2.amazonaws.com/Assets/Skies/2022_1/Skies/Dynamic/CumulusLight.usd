@@ -1,0 +1,515 @@
+#usda 1.0
+(
+    customLayerData = {
+        dictionary audioSettings = {
+            double dopplerLimit = 2
+            double dopplerScale = 1
+            double nonSpatialTimeScale = 1
+            double spatialTimeScale = 1
+            double speedOfSound = 340
+        }
+        dictionary cameraSettings = {
+            dictionary Front = {
+                double3 position = (0, 0, 1000)
+                double radius = 500
+                double3 target = (0, 0, 0)
+            }
+            dictionary Perspective = {
+                double3 position = (-971.2381799565719, 1470.1155247352408, 71.40834256695553)
+                double radius = 1403.154081546656
+                double3 target = (-14.226205512162437, 452.8430780877243, 206.042018231066)
+            }
+            dictionary Right = {
+                double3 position = (-1000, 0, -2.220446049250313e-13)
+                double radius = 500
+                double3 target = (0, 0, 0)
+            }
+            dictionary Top = {
+                double3 position = (-6.106226635438363e-13, 1000.0000000000005, -8.118505867571464e-13)
+                double radius = 500
+                double3 target = (-6.106226635438363e-13, 2.2737367544323206e-13, -1.457167719820523e-13)
+            }
+            string boundCamera = "/OmniverseKit_Persp"
+        }
+        int refinementOverrideImplVersion = 0
+        dictionary renderSettings = {
+            float "rtx:domeLight:baking:spp" = 1
+            float "rtx:domeLight:baking:resolution" = 2048
+            float "rtx:post:lensDistortion:cameraFocalLength" = 18.147562
+            token "rtx:rendermode" = "PathTracing"
+        }
+    }
+    defaultPrim = "World"
+    endTimeCode = 100
+    metersPerUnit = 0.009999999776482582
+    timeCodesPerSecond = 24
+    upAxis = "Z"
+)
+
+def Xform "World"
+{
+    double DayOfYear = 100 (
+        customData = {
+            dictionary range = {
+                float max = 365
+                float min = 0
+            }
+        }
+    )
+    float3[] extent = [(0, 0, 0)]
+    double Latitude = 51.426 (
+        customData = {
+            dictionary range = {
+                float max = 90
+                float min = -90
+            }
+        }
+    )
+    double Longitude = -0.985 (
+        customData = {
+            dictionary range = {
+                float max = 180
+                float min = -180
+            }
+        }
+    )
+    double NorthOrientation = 0 (
+        customData = {
+            dictionary range = {
+                float max = 360
+                float min = -360
+            }
+        }
+    )
+    color3f settings:AmbientColorA = (0.5, 0.68, 1) (
+        displayGroup = "Settings"
+    )
+    color3f settings:AmbientColorB = (0.25, 0.2, 0.12) (
+        displayGroup = "Settings"
+    )
+    color3f settings:AmbientColorC = (0.075, 0.092, 0.111) (
+        displayGroup = "Settings"
+    )
+    float settings:AmbientElevationA = 6 (
+        displayGroup = "Settings"
+    )
+    float settings:AmbientElevationC = -2 (
+        displayGroup = "Settings"
+    )
+    float settings:AmbientIntensity = 0.1 (
+        customData = {
+            dictionary range = {
+                float max = 1
+                float min = 0
+            }
+        }
+        displayGroup = "Settings"
+    )
+    color3f settings:DomeColorA = (1, 1, 1) (
+        displayGroup = "Settings"
+    )
+    color3f settings:DomeColorB = (1, 1, 1) (
+        displayGroup = "Settings"
+    )
+    color3f settings:DomeColorC = (1, 1, 1) (
+        displayGroup = "Settings"
+    )
+    float settings:DomeElevationA = 6 (
+        displayGroup = "Settings"
+    )
+    float settings:DomeElevationC = -6 (
+        displayGroup = "Settings"
+    )
+    bool settings:DomeEnabled = 1 (
+        displayGroup = "Settings"
+    )
+    float settings:DomeIntensity = 1 (
+        customData = {
+            dictionary range = {
+                float max = 10000
+                float min = 0
+            }
+        }
+        displayGroup = "Settings"
+    )
+    color3f settings:FogColorA = (0.192, 0.28, 0.376) (
+        displayGroup = "Settings"
+    )
+    color3f settings:FogColorB = (0.772, 0.2, 0.007) (
+        displayGroup = "Settings"
+    )
+    color3f settings:FogColorC = (0.002, 0.002, 0.003) (
+        displayGroup = "Settings"
+    )
+    float settings:FogColorIntensity = 10 (
+        customData = {
+            dictionary range = {
+                float max = 100
+                float min = 0
+            }
+        }
+        displayGroup = "Settings"
+    )
+    float settings:FogDensityA = 0.1 (
+        customData = {
+            dictionary range = {
+                float max = 1
+                float min = 0
+            }
+        }
+        displayGroup = "Settings"
+    )
+    float settings:FogDensityB = 0.03 (
+        customData = {
+            dictionary range = {
+                float max = 1
+                float min = 0
+            }
+        }
+        displayGroup = "Settings"
+    )
+    float settings:FogElevationA = 8 (
+        displayGroup = "Settings"
+    )
+    float settings:FogElevationB = -3 (
+        displayGroup = "Settings"
+    )
+    float settings:FogFactorDistance = 0 (
+        customData = {
+            dictionary range = {
+                float max = 1
+                float min = 0
+            }
+        }
+        displayGroup = "Settings"
+    )
+    float settings:FogFactorHeight = 0.16 (
+        customData = {
+            dictionary range = {
+                float max = 1
+                float min = 0
+            }
+        }
+        displayGroup = "Settings"
+    )
+    float settings:GlobalIntensity = 1 (
+        customData = {
+            dictionary range = {
+                float max = 10
+                float min = 0
+            }
+        }
+        displayGroup = "Settings"
+    )
+    color3f settings:SunColorA = (1, 0.98, 0.95) (
+        displayGroup = "Settings"
+    )
+    color3f settings:SunColorB = (0.5, 0.3, 0.1) (
+        displayGroup = "Settings"
+    )
+    color3f settings:SunColorC = (0.25, 0.013, 0) (
+        displayGroup = "Settings"
+    )
+    float settings:SunColorElevationA = 20 (
+        displayGroup = "Settings"
+    )
+    float settings:SunColorElevationB = -0.5 (
+        displayGroup = "Settings"
+    )
+    float settings:SunIntensity = 5000 (
+        customData = {
+            dictionary range = {
+                float max = 10000
+                float min = 0
+            }
+        }
+        displayGroup = "Settings"
+    )
+    double TimeOfDay = 6.93 (
+        customData = {
+            dictionary range = {
+                float max = 24
+                float min = 0
+            }
+        }
+    )
+    float3 xformOp:rotateZYX = (90, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:rotateZYX"]
+
+    def Xform "AxisNorth" (
+        kind = "model"
+    )
+    {
+        double3 xformOp:rotateZYX = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:rotateZYX"]
+
+        def Xform "AxisLatitude" (
+            kind = "model"
+        )
+        {
+            double3 xformOp:rotateZYX = (0, 0, 51.426)
+            uniform token[] xformOpOrder = ["xformOp:rotateZYX"]
+
+            def Xform "AxisSHA" (
+                kind = "model"
+            )
+            {
+                double3 xformOp:rotateZYX = (256.3934655999612, 0, 0)
+                uniform token[] xformOpOrder = ["xformOp:rotateZYX"]
+
+                def Xform "AxisDeclination" (
+                    kind = "model"
+                )
+                {
+                    double3 xformOp:rotateZYX = (0, 0, 7.999834338981633)
+                    uniform token[] xformOpOrder = ["xformOp:rotateZYX"]
+
+                    def DistantLight "DistantLight" (
+                        prepend apiSchemas = ["ShapingAPI"]
+                        kind = "model"
+                    )
+                    {
+                        float angle = 1
+                        color3f color = (0.7423431, 0.62958664, 0.5119833)
+                        float intensity = 5000
+                        float shaping:cone:angle = 180
+                        float shaping:cone:softness
+                        float shaping:focus
+                        color3f shaping:focusTint
+                        asset shaping:ies:file
+                        token visibility = "invisible"
+                        float3 xformOp:rotateZYX = (90, 0, 0)
+                        float3 xformOp:translate = (0, 0, 0)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX"]
+                    }
+
+                    def Xform "SunSphere" (
+                        kind = "model"
+                    )
+                    {
+                        float3[] extent = [(0, 0, 0)]
+                        bool primvars:doNotCastShadows = 1
+                        token visibility = "invisible"
+                        float3 xformOp:scale = (1, 1, 1)
+                        double3 xformOp:translate = (0, -500000, 0)
+                        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+                    }
+                }
+            }
+        }
+
+        def Xform "AxisAzimuth" (
+            kind = "model"
+        )
+        {
+            double3 xformOp:rotateZYX = (0, -95.65801753838966, 0)
+            uniform token[] xformOpOrder = ["xformOp:rotateZYX"]
+
+            def Xform "AxisElevation" (
+                kind = "model"
+            )
+            {
+                double3 xformOp:rotateZYX = (0, 0, 14.71803360499852)
+                uniform token[] xformOpOrder = ["xformOp:rotateZYX"]
+            }
+        }
+
+        def "SkySphere" (
+            prepend references = @../Sky_Elements/SphereInverseLow.usd@
+        )
+        {
+            float3[] extent = [(0, 0, 0)]
+            rel material:binding = </World/Looks/SkyMaterial> (
+                bindMaterialAs = "strongerThanDescendants"
+            )
+            bool primvars:doNotCastShadows = 1
+            token visibility = "inherited"
+            float3 xformOp:rotateZYX = (0, 0, 0)
+            float3 xformOp:scale = (10000, 10000, 10000)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX", "xformOp:scale"]
+            over "Sphere"
+            {
+                float3[] extent = [(-0.0005, -0.0005, 0), (0.0005, 0.0005, 0.0005)]
+            }
+        }
+
+        def "ArrowsNWSE" (
+            prepend references = @../Sky_Elements/ArrowsNWSE.usd@
+        )
+        {
+            float3[] extent = [(0, 0, 0)]
+            token visibility = "invisible"
+            float3 xformOp:rotateZYX = (0, 270, 0)
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX"]
+        }
+    }
+
+    def Scope "Looks"
+    {
+        def Material "SkyMaterial"
+        {
+            token outputs:mdl:displacement.connect = </World/Looks/SkyMaterial/Shader.outputs:out>
+            token outputs:mdl:surface.connect = </World/Looks/SkyMaterial/Shader.outputs:out>
+            token outputs:mdl:volume.connect = </World/Looks/SkyMaterial/Shader.outputs:out>
+
+            def Shader "Shader"
+            {
+                uniform token info:implementationSource = "sourceAsset"
+                uniform asset info:mdl:sourceAsset = @../Sky_Elements/materials/procedural/CumulusLight.mdl@
+                uniform token info:mdl:sourceAsset:subIdentifier = "CumulusLight"
+                float inputs:Azimuth = -175.266 (
+                    customData = {
+                        float default = -175.76622
+                        dictionary range = {
+                            float max = 100000
+                            float min = -100000
+                        }
+                    }
+                    displayGroup = "Coords"
+                )
+                float inputs:DayOfYear = 100 (
+                    customData = {
+                        float default = 100
+                        dictionary range = {
+                            float max = 100000
+                            float min = -100000
+                        }
+                    }
+                    displayGroup = "Coords"
+                )
+                float inputs:Declination = 17 (
+                    customData = {
+                        float default = 18
+                        dictionary range = {
+                            float max = 100000
+                            float min = -100000
+                        }
+                    }
+                    displayGroup = "Coords"
+                )
+                float inputs:Dummy = 0 (
+                    customData = {
+                        float default = 0
+                        dictionary range = {
+                            float max = 100000
+                            float min = -100000
+                        }
+                    }
+                    displayGroup = "Coords"
+                )
+                float inputs:Elevation = 46.806 (
+                    customData = {
+                        float default = 46.50608
+                        dictionary range = {
+                            float max = 100000
+                            float min = -100000
+                        }
+                    }
+                    displayGroup = "Coords"
+                )
+                float inputs:Latitude = 64 (
+                    customData = {
+                        float default = 64.326
+                        dictionary range = {
+                            float max = 100000
+                            float min = -100000
+                        }
+                    }
+                    displayGroup = "Coords"
+                )
+                float inputs:Longitude = 0 (
+                    customData = {
+                        float default = -0.985
+                        dictionary range = {
+                            float max = 100000
+                            float min = -100000
+                        }
+                    }
+                    displayGroup = "Coords"
+                )
+                float inputs:NorthOrientation = 0 (
+                    customData = {
+                        float default = 0
+                        dictionary range = {
+                            float max = 100000
+                            float min = -100000
+                        }
+                    }
+                    displayGroup = "Coords"
+                )
+                float inputs:SHA = -2.341 (
+                    customData = {
+                        float default = -2.9412704
+                        dictionary range = {
+                            float max = 100000
+                            float min = -100000
+                        }
+                    }
+                    displayGroup = "Coords"
+                )
+                bool inputs:SunPositionFromTOD = 0 (
+                    customData = {
+                        bool default = 1
+                    }
+                    displayGroup = "Coords"
+                )
+                float inputs:TimeOfDay = 3 (
+                    customData = {
+                        float default = 3.696
+                        dictionary range = {
+                            float max = 100000
+                            float min = -100000
+                        }
+                    }
+                    displayGroup = "Coords"
+                )
+                float inputs:TimeOfDaySpeed = 0 (
+                    customData = {
+                        float default = 1.057
+                        dictionary range = {
+                            float max = 100000
+                            float min = -100000
+                        }
+                    }
+                    displayGroup = "Coords"
+                )
+                token outputs:out
+            }
+        }
+    }
+
+    def DomeLight "DomeLight" (
+        prepend apiSchemas = ["ShapingAPI"]
+        kind = "model"
+    )
+    {
+        color3f color = (1, 1, 1)
+        float intensity = 1
+        rel material:binding = </World/Looks/SkyMaterial> (
+            bindMaterialAs = "weakerThanDescendants"
+        )
+        float shaping:cone:angle = 180
+        float shaping:cone:softness
+        float shaping:focus
+        color3f shaping:focusTint
+        asset shaping:ies:file
+        token texture:format = "latlong"
+        token visibility = "inherited"
+        float3 xformOp:rotateZYX = (270, 0, 0)
+        float3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX"]
+    }
+}
+
+def "PreviewScene" (
+    prepend references = @../Sky_Elements/PreviewScene.usda@
+)
+{
+    float3[] extent = [(0, 0, 0)]
+    token visibility = "inherited"
+    float3 xformOp:rotateZYX = (0, 0, 0)
+    double3 xformOp:translate = (0, 0, 0)
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZYX"]
+}

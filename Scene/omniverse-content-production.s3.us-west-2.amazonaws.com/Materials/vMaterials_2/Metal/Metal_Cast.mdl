@@ -1,0 +1,901 @@
+/******************************************************************************
+ *	 Copyright 2023 NVIDIA Corporation. All rights reserved.	 *
+ ******************************************************************************
+ 
+Permission is hereby granted by NVIDIA Corporation ("NVIDIA"), free of charge,
+to any person obtaining a copy of the sample definition code that uses our 
+Material Definition Language (the "MDL Materials"), to reproduce and distribute
+the MDL Materials, including without limitation the rights to use, copy, merge,
+publish, distribute, and sell modified and unmodified copies of the MDL 
+Materials, and to permit persons to whom the MDL Materials is furnished to do
+so, in all cases solely for use with NVIDIA's Material Definition Language,
+subject to the following further conditions:
+
+1. The above copyright notices, this list of conditions, and the disclaimer
+that follows shall be retained in all copies of one or more of the MDL
+Materials, including in any software with which the MDL Materials are bundled,
+redistributed, and/or sold, and included either as stand-alone text files,
+human-readable headers or in the appropriate machine-readable metadata fields
+within text or binary files as long as those fields can be easily viewed by the
+user, as applicable.
+2. The name of NVIDIA shall not be used to promote, endorse or advertise any 
+Modified Version without specific prior written permission, except a) to comply
+ with the notice requirements otherwise contained herein; or b) to acknowledge
+the contribution(s) of NVIDIA.
+
+THE MDL MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF COPYRIGHT, PATENT,
+TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL NVIDIA CORPORATION BE LIABLE FOR 
+ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY GENERAL, SPECIAL, 
+INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN AN ACTION OF 
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR INABILITY TO USE
+THE MDL MATERIALS OR FROM OTHER DEALINGS IN THE MDL MATERIALS.
+*/
+
+mdl 1.6;
+
+import ::anno::*;
+import ::base::*;
+import ::df::*;
+import ::math::*;
+import ::state::*;
+import ::tex::*;
+import ::nvidia::core_definitions::blend_colors;
+import ::nvidia::core_definitions::dimension;
+
+
+const string COPYRIGHT = 
+" Copyright 2023 NVIDIA Corporation. All rights reserved.\n"
+" MDL MATERIALS ARE PROVIDED PURSUANT TO AN END USER LICENSE  AGREEMENT,\n"
+" WHICH WAS ACCEPTED IN ORDER TO GAIN ACCESS TO THIS FILE.  IN PARTICULAR,\n" 
+" THE MDL MATERIALS ARE PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\n"
+" EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\n"
+" MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF\n" 
+" COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL NVIDIA\n"
+" CORPORATION BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY\n"
+" GENERAL, SPECIAL,  INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN\n"
+" AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR\n"
+" INABILITY TO USE THE MDL MATERIALS OR FROM OTHER DEALINGS IN THE MDL MATERIALS.\n";
+
+
+float overlay(float base, float layer, float weight)
+{
+	return base + (1.0f - base) * layer * weight;
+}
+
+float3 srgb2rgb(float3 val)
+{
+	return ::math::pow(::math::max(val, float3(0.0f)), 2.2);
+}
+
+
+float uint2float(int x)
+{
+	return float(x & 0x7FFFFFFF) + (x < 0 ? 2147483648.0 : 0.0);
+}
+
+int lowbias32(int x)
+{
+	x ^= x >>> 16;
+	x *= 0x7feb352d;
+	x ^= x >>> 15;
+	x *= 0x846ca68b;
+	x ^= x >>> 16;
+	return x;
+}
+
+float2 rnd22(int2 p) {
+	float2 ret_val = float2(
+		uint2float(lowbias32(p[0] + lowbias32(p[1]))) / 4294967296.f,
+		uint2float(lowbias32(p[0] + 32000 + lowbias32(p[1]))) / 4294967296.f
+	);
+	return ret_val;
+}	
+
+::base::texture_coordinate_info vmat_transform(
+								uniform float2 translation = float2(0.0, 0.0),
+								uniform float rotation	 = 0.0,
+								uniform float2 scaling	 = float2(1.0, 1.0),
+								uniform ::base::texture_coordinate_system system = ::base::texture_coordinate_uvw,
+								uniform int uv_space	   = 0
+)
+{
+	float4x4 scale =
+	float4x4(1.0 /scaling.x, 0.			 ,  0. ,	 0.,
+			 0.			, 1.0 /scaling.y ,  0. ,	 0.,
+			 0.			, 0.			 ,  1.0,	 0.,
+			 translation.x , translation.y  ,  0.0,	 1.);
+
+	float s = ::math::sin(rotation);
+	float c = ::math::cos(rotation);
+	float4x4 rotate =
+	float4x4(  c  ,  -s   , 0.0 , 0.0,
+			   s  ,   c   , 0.0 , 0.0,
+			   0.0,   0.0 , 1.0 , 0.0,
+			   0. ,   0.0 , 0.0 , 1.);
+	
+	return ::base::transform_coordinate(scale*rotate, ::base::coordinate_source(system, uv_space));
+}
+
+float2x2 invert_2x2(float2x2 M)
+{
+	float det = M[0][0]*M[1][1] - M[0][1]*M[1][0];
+	//https://www.chilimath.com/lessons/advanced-algebra/inverse-of-a-2x2-matrix/
+	return (1.0 / det) * float2x2(M[1][1], -M[0][1], -M[1][0], M[0][0]);
+}
+
+float3 nonrepeat_lookup(
+	uniform texture_2d texture = texture_2d(),
+	::base::texture_coordinate_info uvw = ::base::coordinate_source(),
+	float texture_scale = 1.0,
+	float3 average_color = float3(0.5),
+	float patch_size = 8.0
+)
+{
+	
+	float2 uv_in = float2(uvw.position[0], uvw.position[1]) * texture_scale;
+	float Z =  patch_size;	 // patch scale inside example texture
+	float CON = 1.0f;
+	
+	float3 O = float3(0.f);
+	float2x2 M0 = float2x2(1.f,0.f, 0.5f, ::math::sqrt(3.f)/2.f);
+	float2x2 M = invert_2x2(M0); // transform matrix <-> tilted space
+	
+	float2 U = uv_in;
+	float2 V = M * uv_in; //pre-tilted hexa coordinates
+	int2 I = int2(::math::floor(V)); // hexa-tile id
+	
+	// The mean color needs to be determined in Photoshop then to make the
+	// average color work out, take the float value and calculate the apropriate
+	// mean value as (value^(1/2.2))
+
+	float3 m = average_color;
+	
+	float3 F = float3(::math::frac(V)[0], ::math::frac(V)[1], 0.f), W;
+	F[2] = 1.0 - F[0] - F[1]; // local hexa coordinates
+	
+	if( F[2] > 0.f )
+
+		O = (W[0] = F[2]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I))) - m*float(CON))
+		  + (W[1] = F[1]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(0,1)))) - m*float(CON))
+		  + (W[2] = F[0]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(1,0)))) - m*float(CON));
+	else
+		O = (W[0] =	  -F[2]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(1))))   - m*float(CON))
+		  + (W[1] = 1.f - F[1]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(1, 0)))) - m*float(CON))
+		  + (W[2] = 1.f - F[0]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(0, 1)))) - m*float(CON));
+	O = m + O/::math::length(W);
+	O = ::math::clamp( (O), 0.0, 1.0);
+	
+	return float3(O);
+}
+
+
+float histogram_range(float input, float range, float position)
+{	
+	float low = ::math::clamp(1.0 - ::math::min(((1.0 - position) + range * 0.5), (1.0 - position) * 2), 0.0, 1.0);
+	float high = ::math::clamp(::math::min((position + range * 0.5 ), position * 2.0), 0.0, 1.0);
+	return ::math::lerp(low, high, input);
+}
+
+
+color endless_texture(
+	uniform texture_2d texture = texture_2d(),
+	::base::texture_coordinate_info uvw = ::base::coordinate_source(),
+	float texture_scale = 10.0,
+	float3 average_color = float3(0.5, 0.5, 1.0),
+	float patch_size = 8.0,
+	bool gamma_correct_lookup = true
+)
+{
+	return gamma_correct_lookup ? color(srgb2rgb(
+			nonrepeat_lookup (
+				texture: texture,
+				uvw: uvw,
+				texture_scale: texture_scale,
+				average_color: average_color,
+				patch_size: patch_size
+			))
+		) : color(nonrepeat_lookup (
+			texture: texture,
+			uvw: uvw,
+			texture_scale: texture_scale,
+			average_color: average_color,
+			patch_size: patch_size
+		));
+}
+
+float3 endless_normal(
+	uniform texture_2d texture = texture_2d(),
+	float factor = 1.0,
+	bool flip_tangent_u = false,
+	bool flip_tangent_v = false,
+	::base::texture_coordinate_info uvw = ::base::coordinate_source(),
+	float texture_scale = 1.0,
+	float3 average_color = float3(0.5, 0.5, 1.0),
+	float patch_size = 8.0
+)
+{
+	float3 transformed_tangent_u = flip_tangent_u ? uvw.tangent_u : - uvw.tangent_u;
+	float3 transformed_tangent_v = flip_tangent_v ? uvw.tangent_v : - uvw.tangent_v;
+	
+	if (flip_tangent_u)
+		transformed_tangent_u=-transformed_tangent_u;
+	if (flip_tangent_v)
+		transformed_tangent_v=-transformed_tangent_v;
+
+	// normalized Lookup
+	float3 tangent_space_normal =
+		 (nonrepeat_lookup (
+			texture: texture,
+			uvw: uvw,
+			texture_scale: texture_scale,
+			average_color: average_color,
+			patch_size: patch_size
+		) - 0.5) * (2.0 * factor);
+		
+	 return ::math::normalize(uvw.tangent_u * tangent_space_normal.x +
+		  uvw.tangent_v * tangent_space_normal.y +
+		  ::state::normal()*1.0); 
+}
+
+
+float3 normalmap_normal(
+	uniform texture_2d texture,
+	float factor = 1.0,
+	::base::texture_coordinate_info uvw = ::base::texture_coordinate_info()
+)
+{
+	float3 lookup = (::tex::lookup_float3(texture, float2(uvw.position.x, uvw.position.y)) - float3(0.5)) * (factor * 2.0);
+	return ::math::normalize(uvw.tangent_u * lookup.x + uvw.tangent_v * lookup.y + ::state::normal() * (lookup.z + (1.0 - factor)));
+}
+
+export material Metal_Cast(
+	uniform bool infinite_tiling = true [[
+		::anno::description("Enables infinite tiling feature which removes repeating texture patterns. Note that depending on the material this feature changes the appearance of the material slightly."),
+		::anno::display_name("Infinite Tiling"),
+		::anno::in_group("Appearance"),
+		::anno::ui_order(0)
+	]],
+	float roughness = 0.129999995f [[
+		::anno::description("Higher values lead to blurrier reflections and make the material appear rough"),
+		::anno::display_name("Roughness"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f),
+		::anno::ui_order(1)
+	]],
+	float roughness_variation = 0.f [[
+		::anno::description("Amount of variation applied to the roughness, higher numbers lead to non uniform reflections of the material"),
+		::anno::display_name("Roughness Variation"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f),
+		::anno::ui_order(2)
+	]],
+	float metalness = 0.f [[
+		::anno::description("Makes the material more reflective"),
+		::anno::display_name("Metalness"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f),
+		::anno::ui_order(3)
+	]],
+	color metal_tint = color(1.f, 1.f, 1.f) [[
+		::anno::description("Change the color of the reflection of the metal with this control"),
+		::anno::display_name("Metal Color"),
+		::anno::in_group("Appearance"),
+		::anno::ui_order(4)
+	]],
+	float smudges = 0.099999994f [[
+		::anno::description("Adds smudges on top of the material"),
+		::anno::display_name("Smudges"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f),
+		::anno::ui_order(5)
+	]],
+	float bump_strength = 1.f [[
+		::anno::description("Adjusts the bumpiness of the surface"),
+		::anno::display_name("Bump Strength"),
+		::anno::in_group("Appearance"),
+		::anno::soft_range(0.f, 1.f),
+		::anno::hard_range(0.f, 2.f),
+		::anno::ui_order(6)
+	]],
+	uniform float2 texture_translate = float2(0.f) [[
+		::anno::description("Controls the position of the texture."),
+		::anno::display_name("Texture Translate"),
+		::anno::in_group("Transform"),
+		::anno::ui_order(7)
+	]],
+	uniform float texture_rotate = 0.f [[
+		::anno::description("Rotates angle of the texture in degrees."),
+		::anno::display_name("Texture Rotate"),
+		::anno::in_group("Transform"),
+		::anno::soft_range(0.f, 360.f),
+		::anno::ui_order(8)
+	]],
+	uniform float2 texture_scale = float2(1.f) [[
+		::anno::description("Larger numbers increase the size."),
+		::anno::display_name("Texture Scale"),
+		::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(0.4f, 0.4f)),
+		::anno::ui_order(9)
+	]],
+	uniform bool roundcorners_enable = false [[
+		::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect"),
+		::anno::display_name("Enable Round Corners"),
+		::anno::in_group("Round Corners"),
+		::anno::ui_order(10)
+	]],
+	uniform float roundcorners_radius_mm = 1.5f [[
+		::anno::description("Radius of the rounded corners in millimeters"),
+		::anno::display_name("Round Corner Radius (mm)"),
+		::anno::in_group("Round Corners"),
+		::anno::soft_range(0.f, 10.f),
+		::anno::ui_order(11)
+	]],
+	uniform bool roundcorners_across_materials = false [[
+		::anno::description("Applies the round corner effect across different materials when enabled."),
+		::anno::display_name("Across Materials"),
+		::anno::in_group("Round Corners"),
+		::anno::ui_order(12)
+	]],
+	uniform int uv_space_index = 0 [[
+		::anno::description("Uses selected UV space for material"),
+		::anno::display_name("UV Space Index"),
+		::anno::in_group("Transform"),
+		::anno::ui_order(13)
+	]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Cast Metal"),
+	::anno::description("A generic material with a cast metal bump. The appearance can be blended between metallic and dielectric behavior to simulate painted metal as well."),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Metal_Cast.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "template", "generic", "design", "kitchen", "sanitary", "construction", "automotive", "architecture", "interior", "exterior")),
+	::anno::hidden()
+]]
+ = 
+	let {
+		bool tmp0 = false;
+		material_surface tmp1(::df::weighted_layer(0.0149999997f, ::df::microfacet_ggx_smith_bsdf(0.560000002f, 0.560000002f, color(1.f, 1.f, 1.f), color(0.f, 0.f, 0.f), ::state::texture_tangent_u(0), ::df::scatter_reflect), ::df::weighted_layer(metalness, ::df::color_custom_curve_layer(nvidia::core_definitions::blend_colors(metal_tint, color(0.577580988f, 0.577580988f, 0.577580988f), ::base::color_layer_multiply, 1.f, true).tint, color(1.f, 1.f, 1.f), 3.f, color(1.f, 1.f, 1.f), ::df::microfacet_ggx_smith_bsdf(overlay(histogram_range(float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).x, roughness_variation, roughness * 0.600000024f + 0.0799999982f), float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).y, smudges) * overlay(histogram_range(float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).x, roughness_variation, roughness * 0.600000024f + 0.0799999982f), float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).y, smudges), overlay(histogram_range(float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).x, roughness_variation, roughness * 0.600000024f + 0.0799999982f), float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).y, smudges) * overlay(histogram_range(float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).x, roughness_variation, roughness * 0.600000024f + 0.0799999982f), float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).y, smudges), color(1.f, 1.f, 1.f), color(0.f, 0.f, 0.f), ::state::texture_tangent_u(0), ::df::scatter_reflect), bsdf(), infinite_tiling ? endless_normal(texture_2d("./textures/cast_metal_norm.jpg", ::tex::gamma_linear), bump_strength, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.5f, 0.5f, 0.991999984f), 8.f) : normalmap_normal(texture_2d("./textures/cast_metal_norm.jpg", ::tex::gamma_linear), bump_strength, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index))), ::df::color_custom_curve_layer(color(0.0100229997f, 0.0100229997f, 0.0100229997f), color(1.f, 1.f, 1.f), 3.f, color(1.f, 1.f, 1.f), ::df::microfacet_ggx_smith_bsdf(overlay(histogram_range(float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).x, roughness_variation, roughness * 0.600000024f + 0.0799999982f), float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).y, smudges) * overlay(histogram_range(float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).x, roughness_variation, roughness * 0.600000024f + 0.0799999982f), float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).y, smudges), overlay(histogram_range(float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).x, roughness_variation, roughness * 0.600000024f + 0.0799999982f), float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).y, smudges) * overlay(histogram_range(float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).x, roughness_variation, roughness * 0.600000024f + 0.0799999982f), float3(infinite_tiling ? ::base::file_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 0.f, int2(0), ::tex::wrap_repeat, 30.f).tint : endless_texture(texture_2d("./textures/cast_metal_multi_R_rough_G_smudges.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.414000005f, 0.109999999f, 0.5f), 8.f, false)).y, smudges), color(1.f, 1.f, 1.f), color(0.f, 0.f, 0.f), ::state::texture_tangent_u(0), ::df::scatter_reflect), ::df::diffuse_reflection_bsdf(nvidia::core_definitions::blend_colors(metal_tint, color(0.507079005f, 0.507079005f, 0.507079005f), ::base::color_layer_multiply, 1.f, true).tint, 0.f), infinite_tiling ? endless_normal(texture_2d("./textures/cast_metal_norm.jpg", ::tex::gamma_linear), bump_strength, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.5f, 0.5f, 0.991999984f), 8.f) : normalmap_normal(texture_2d("./textures/cast_metal_norm.jpg", ::tex::gamma_linear), bump_strength, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index))), ::state::normal()), infinite_tiling ? endless_normal(texture_2d("./textures/cast_metal_norm.jpg", ::tex::gamma_linear), bump_strength, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 10.f, float3(0.5f, 0.5f, 0.991999984f), 8.f) : normalmap_normal(texture_2d("./textures/cast_metal_norm.jpg", ::tex::gamma_linear), bump_strength, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index))), material_emission(emission: edf(), intensity: color(0.f, 0.f, 0.f), mode: intensity_radiant_exitance));
+		material_surface tmp2 = material_surface(scattering: bsdf(), emission: material_emission(emission: edf(), intensity: color(0.f, 0.f, 0.f), mode: intensity_radiant_exitance));
+		color tmp3 = color(1.f, 1.f, 1.f);
+		material_volume tmp4 = material_volume(scattering: vdf(), absorption_coefficient: color(0.f, 0.f, 0.f), scattering_coefficient: color(0.f, 0.f, 0.f));
+		material_geometry tmp5(float3(0.f), 1.f, roundcorners_enable ? ::state::rounded_corner_normal(roundcorners_radius_mm * 0.00100000005f, roundcorners_across_materials, 1.f) : ::state::normal());
+	} in
+		material(
+			thin_walled: tmp0,
+			surface: tmp1,
+			backface: tmp2,
+			ior: tmp3,
+			volume: tmp4,
+			geometry: tmp5);
+
+// Material above serves as template and is supposed to remain hidden
+// 1
+export material Iron_Cast(
+	uniform bool infinite_tiling = true [[
+		::anno::description("Enables infinite tiling feature which removes repeating texture patterns. Note that depending on the material this feature changes the appearance of the material slightly."),
+		::anno::display_name("Infinite Tiling"),
+		::anno::in_group("Appearance"),
+		::anno::ui_order(0)
+	]],
+	float roughness = 0.33f [[
+		::anno::description("Higher values lead to blurrier reflections and make the material appear rough"),
+		::anno::display_name("Roughness"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f),
+		::anno::ui_order(1)
+	]],
+	float roughness_variation = 0.67f [[
+		::anno::description("Amount of variation applied to the roughness, higher numbers lead to non uniform reflections of the material"),
+		::anno::display_name("Roughness Variation"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f),
+		::anno::ui_order(2)
+	]],
+	color metal_tint = color(0.019f) [[
+		::anno::description("Change the color of the reflection of the metal with this control"),
+		::anno::display_name("Metal Color"),
+		::anno::in_group("Appearance"),
+		::anno::ui_order(4)
+	]],
+	float smudges = 0.17f [[
+		::anno::description("Adds smudges on top of the material"),
+		::anno::display_name("Smudges"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f),
+		::anno::ui_order(5)
+	]],
+	float bump_strength = 1.f [[
+		::anno::description("Adjusts the bumpiness of the surface"),
+		::anno::display_name("Bump Strength"),
+		::anno::in_group("Appearance"),
+		::anno::soft_range(0.f, 1.f),
+		::anno::hard_range(0.f, 2.f),
+		::anno::ui_order(6)
+	]],
+	uniform float2 texture_translate = float2(0.f) [[
+		::anno::description("Controls the position of the texture."),
+		::anno::display_name("Texture Translate"),
+		::anno::in_group("Transform"),
+		::anno::ui_order(7)
+	]],
+	uniform float texture_rotate = 0.f [[
+		::anno::description("Rotates angle of the texture in degrees."),
+		::anno::display_name("Texture Rotate"),
+		::anno::in_group("Transform"),
+		::anno::soft_range(0.f, 360.f),
+		::anno::ui_order(8)
+	]],
+	uniform float2 texture_scale = float2(1.f) [[
+		::anno::description("Larger numbers increase the size."),
+		::anno::display_name("Texture Scale"),
+		::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(0.4f, 0.4f)),
+		::anno::ui_order(9)
+	]],
+	uniform bool roundcorners_enable = false [[
+		::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect"),
+		::anno::display_name("Enable Round Corners"),
+		::anno::in_group("Round Corners"),
+		::anno::ui_order(10)
+	]],
+	uniform float roundcorners_radius_mm = 1.5f [[
+		::anno::description("Radius of the rounded corners in millimeters"),
+		::anno::display_name("Round Corner Radius (mm)"),
+		::anno::in_group("Round Corners"),
+		::anno::soft_range(0.f, 10.f),
+		::anno::ui_order(11)
+	]],
+	uniform bool roundcorners_across_materials = false [[
+		::anno::description("Applies the round corner effect across different materials when enabled."),
+		::anno::display_name("Across Materials"),
+		::anno::in_group("Round Corners"),
+		::anno::ui_order(12)
+	]],
+	uniform int uv_space_index = 0 [[
+		::anno::description("Uses selected UV space for material"),
+		::anno::display_name("UV Space Index"),
+		::anno::in_group("Transform"),
+		::anno::ui_order(13)
+	]]
+
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Cast Iron - Black"),
+	::anno::description("A cast iron material"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Iron_Cast.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "iron", "design", "kitchen", "construction", "architecture", "interior", "exterior", "black", "dark", "neutral"))
+]] = Metal_Cast(
+	infinite_tiling:		infinite_tiling,
+	roughness:				roughness,
+	roughness_variation:	roughness_variation,
+	metalness:				1.0,
+	metal_tint:				metal_tint,
+	smudges:				smudges,
+	bump_strength:			bump_strength,
+	texture_translate:		texture_translate,
+	texture_rotate:			texture_rotate,
+	texture_scale:			texture_scale,
+	roundcorners_enable:	roundcorners_enable,
+	roundcorners_radius_mm:	roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	uv_space_index:			uv_space_index
+);
+
+// 2
+export material Iron_Cast_Black_Matte(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Cast Iron - Black Matte"),
+	::anno::description("A cast iron material"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Iron_Cast_Black_Matte.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "iron", "design", "kitchen", "construction", "architecture", "interior", "exterior", "black", "dark", "neutral"))
+]]  = Iron_Cast
+(
+	infinite_tiling:		true,
+	roughness:				.84f,
+	roughness_variation:	1.0f,
+	metal_tint:				color(0.019f),
+	smudges:				.45f,
+	bump_strength:			1.0f,
+	texture_translate:		float2(0.0f),
+	texture_rotate:			0.0f,
+	texture_scale:			float2(1.0f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	0.5f,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+// 3
+export material Stainless_Steel_Cast_Shiny(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Cast Stainless Steel - Shiny"),
+	::anno::description("A cast stainless steel material"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Stainless_Steel_Cast_Shiny.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "steel", "stainless", "design", "kitchen", "construction", "architecture", "interior", "exterior", "shiny", "reflective"))
+]]  = Iron_Cast
+(
+	infinite_tiling:		true,
+	roughness:				0.27f,
+	roughness_variation:	0.51f,
+	metal_tint:				color(0.679542f),
+	smudges:				.2f,
+	bump_strength:			1.0f,
+	texture_translate:		float2(0.0f),
+	texture_rotate:			0.0f,
+	texture_scale:			float2(1.0f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	0.5f,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+// 4
+export material Stainless_Steel_Cast_Rough(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Cast Stainless Steel - Rough"),
+	::anno::description("A cast stainless steel material"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Stainless_Steel_Cast_Rough.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "steel", "stainless", "design", "kitchen", "construction", "architecture", "interior", "exterior", "rough", "matte", "gray", "matte"))
+]]  = Iron_Cast
+(
+	infinite_tiling:		true,
+	roughness:				0.74f,
+	roughness_variation:	0.4f,
+	metal_tint:				color(0.679542f),
+	smudges:				.30f,
+	bump_strength:			1.0f,
+	texture_translate:		float2(0.0f),
+	texture_rotate:			0.0f,
+	texture_scale:			float2(1.0f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	0.5f,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+// 5
+export material Aluminum_Cast_Shiny(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Cast Aluminum - Shiny"),
+	::anno::description("A cast aluminum material"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Aluminum_Cast_Shiny.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "aluminum", "design", "kitchen", "construction", "architecture", "interior", "exterior", "rough", "reflective", "shiny"))
+]]  = Iron_Cast
+(
+	infinite_tiling:		true,
+	roughness:				0.51f,
+	roughness_variation:	0.51f,
+	metal_tint:				color(0.514918f, 0.571125f, 0.623960f),
+	smudges:				.0f,
+	bump_strength:			1.0f,
+	texture_translate:		float2(0.0f),
+	texture_rotate:			0.0f,
+	texture_scale:			float2(1.0f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	0.5f,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+// 6
+export material Aluminum_Cast_Rough(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Cast Aluminum - Rough"),
+	::anno::description("A cast aluminum material"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Aluminum_Cast_Rough.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "aluminum", "design", "kitchen", "construction", "architecture", "interior", "exterior", "rough", "matte", "gray"))
+]]  = Iron_Cast
+(
+	infinite_tiling:		true,
+	roughness:				0.91f,
+	roughness_variation:	0.51f,
+	metal_tint:				color(0.514918f, 0.571125f, 0.623960f),
+	smudges:				.0f,
+	bump_strength:			1.0f,
+	texture_translate:		float2(0.0f),
+	texture_rotate:			0.0f,
+	texture_scale:			float2(1.0f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	0.5f,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+// 7
+// Cast Metal with a diffuse dielectic paint layer
+export material Metal_Cast_Painted(
+	uniform bool infinite_tiling = true [[
+		::anno::description("Enables infinite tiling feature which removes repeating texture patterns. Note that depending on the material this feature changes the appearance of the material slightly."),
+		::anno::display_name("Infinite Tiling"),
+		::anno::in_group("Appearance"),
+		::anno::ui_order(0)
+	]],
+	float roughness = 0.25f [[
+		::anno::description("Higher values lead to blurrier reflections and make the material appear rough"),
+		::anno::display_name("Roughness"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f),
+		::anno::ui_order(1)
+	]],
+	float roughness_variation = 0.67f [[
+		::anno::description("Amount of variation applied to the roughness, higher numbers lead to non uniform reflections of the material"),
+		::anno::display_name("Roughness Variation"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f),
+		::anno::ui_order(2)
+	]],
+	color metal_tint = color(0.029557f, 0.135633f, 0.491021f) [[
+		::anno::description("Changes the color of the paint"),
+		::anno::display_name("Paint Color"),
+		::anno::in_group("Appearance"),
+		::anno::ui_order(4)
+	]],
+	float smudges = 0.17f [[
+		::anno::description("Adds smudges on top of the material"),
+		::anno::display_name("Smudges"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f),
+		::anno::ui_order(5)
+	]],
+	float bump_strength = 1.f [[
+		::anno::description("Adjusts the bumpiness of the surface"),
+		::anno::display_name("Bump Strength"),
+		::anno::in_group("Appearance"),
+		::anno::soft_range(0.f, 1.f),
+		::anno::hard_range(0.f, 2.f),
+		::anno::ui_order(6)
+	]],
+	uniform float2 texture_translate = float2(0.f) [[
+		::anno::description("Controls the position of the texture."),
+		::anno::display_name("Texture Translate"),
+		::anno::in_group("Transform"),
+		::anno::ui_order(7)
+	]],
+	uniform float texture_rotate = 0.f [[
+		::anno::description("Rotates angle of the texture in degrees."),
+		::anno::display_name("Texture Rotate"),
+		::anno::in_group("Transform"),
+		::anno::soft_range(0.f, 360.f),
+		::anno::ui_order(8)
+	]],
+	uniform float2 texture_scale = float2(1.f) [[
+		::anno::description("Larger numbers increase the size."),
+		::anno::display_name("Texture Scale"),
+		::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(0.4f, 0.4f)),
+		::anno::ui_order(9)
+	]],
+	uniform bool roundcorners_enable = false [[
+		::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect"),
+		::anno::display_name("Enable Round Corners"),
+		::anno::in_group("Round Corners"),
+		::anno::ui_order(10)
+	]],
+	uniform float roundcorners_radius_mm = 1.5f [[
+		::anno::description("Radius of the rounded corners in millimeters"),
+		::anno::display_name("Round Corner Radius (mm)"),
+		::anno::in_group("Round Corners"),
+		::anno::soft_range(0.f, 10.f),
+		::anno::ui_order(11)
+	]],
+	uniform bool roundcorners_across_materials = false [[
+		::anno::description("Applies the round corner effect across different materials when enabled."),
+		::anno::display_name("Across Materials"),
+		::anno::in_group("Round Corners"),
+		::anno::ui_order(12)
+	]],
+	uniform int uv_space_index = 0 [[
+		::anno::description("Uses selected UV space for material"),
+		::anno::display_name("UV Space Index"),
+		::anno::in_group("Transform"),
+		::anno::ui_order(13)
+	]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Painted Cast Metal - Blue"),
+	::anno::description("A painted cast material. The metal itself is underneath the paint layer, therefore it is a 'generic' metal"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Metal_Cast_Painted.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "painted", "design", "kitchen", "construction", "architecture", "interior", "exterior", "shiny", "blue", "cool", "saturated"))
+]] = Metal_Cast(
+	infinite_tiling:		infinite_tiling,
+	roughness:				roughness,
+	roughness_variation:	roughness_variation,
+	metalness:				0.0f,
+	metal_tint:				metal_tint,
+	smudges:				smudges,
+	bump_strength:			bump_strength,
+	texture_translate:		texture_translate,
+	texture_rotate:			texture_rotate,
+	texture_scale:			texture_scale,
+	roundcorners_enable:	roundcorners_enable,
+	roundcorners_radius_mm:	roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	uv_space_index:			uv_space_index
+);
+
+// 8 Red
+export material Metal_Cast_Painted_Red(*) 
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Painted Cast Metal - Red"),
+	::anno::description("A painted cast material. The metal itself is underneath the paint layer, therefore it is a 'generic' metal"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Metal_Cast_Painted_Red.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "painted", "design", "kitchen", "construction", "architecture", "interior", "exterior", "shiny", "red", "warm", "saturated"))
+]] = Metal_Cast_Painted
+(
+	infinite_tiling:		true,
+	roughness:				.25f,
+	roughness_variation:	.67f,
+	metal_tint:				color(0.491021f, 0.029557f, 0.029557f),
+	smudges:				.17f,
+	bump_strength:			1.0f,
+	texture_translate:		float2(0.0f),
+	texture_rotate:			0.0f,
+	texture_scale:			float2(1.0f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	0.5,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+// 9 Gray
+export material Metal_Cast_Painted_Gray(*) 
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Painted Cast Metal - Gray"),
+	::anno::description("A painted cast material. The metal itself is underneath the paint layer, therefore it is a 'generic' metal"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Metal_Cast_Painted_Gray.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "painted", "design", "kitchen", "construction", "architecture", "interior", "exterior", "shiny", "gray", "neutral"))
+]] = Metal_Cast_Painted
+(
+	infinite_tiling:		true,
+	roughness:				.25f,
+	roughness_variation:	.67f,
+	metal_tint:				color(0.332452f, 0.332452f, 0.332452f),
+	smudges:				.17f,
+	bump_strength:			1.0f,
+	texture_translate:		float2(0.0f),
+	texture_rotate:			0.0f,
+	texture_scale:			float2(1.0f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	0.5,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+// 10 Antique White
+export material Metal_Cast_Painted_Antique_White(*) 
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Painted Cast Metal - Antique White"),
+	::anno::description("A painted cast material. The metal itself is underneath the paint layer, therefore it is a 'generic' metal"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Metal_Cast_Painted_Antique_White.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "painted", "design", "kitchen", "construction", "architecture", "interior", "exterior", "shiny", "antique", "white", "light"))
+]] = Metal_Cast_Painted
+(
+	infinite_tiling:		true,
+	roughness:				.25f,
+	roughness_variation:	.67f,
+	metal_tint:				color(0.799103f, 0.708376f, 0.539479f),
+	smudges:				.17f,
+	bump_strength:			1.0f,
+	texture_translate:		float2(0.0f),
+	texture_rotate:			0.0f,
+	texture_scale:			float2(1.0f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	0.5,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+// 11 White
+export material Metal_Cast_Painted_White(*) 
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Painted Cast Metal - White"),
+	::anno::description("A painted cast material. The metal itself is underneath the paint layer, therefore it is a 'generic' metal"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Metal_Cast_Painted_White.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "painted", "design", "kitchen", "construction", "architecture", "interior", "exterior", "shiny", "white", "light"))
+]] = Metal_Cast_Painted
+(
+	infinite_tiling:		true,
+	roughness:				.25f,
+	roughness_variation:	.67f,
+	metal_tint:				color(0.693872f, 0.693872f, 0.693872f),
+	smudges:				.17f,
+	bump_strength:			1.0f,
+	texture_translate:		float2(0.0f),
+	texture_rotate:			0.0f,
+	texture_scale:			float2(1.0f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	0.5,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+// 12 Petrol
+export material Metal_Cast_Painted_Petrol(*) 
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+	::anno::contributor("Maik Rohland"),
+	::anno::display_name("Painted Cast Metal - Petrol"),
+	::anno::description("A painted cast material. The metal itself is underneath the paint layer, therefore it is a 'generic' metal"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Metal_Cast.Metal_Cast_Painted_Petrol.png"),
+	::anno::key_words(string[]("metal", "cast", "bumped", "painted", "design", "kitchen", "construction", "architecture", "interior", "exterior", "shiny", "petrol"))
+]] = Metal_Cast_Painted
+(
+	infinite_tiling:		true,
+	roughness:				.25f,
+	roughness_variation:	.67f,
+	metal_tint:				color(0.144128f, 0.212231f, 0.223228f),
+	smudges:				.17f,
+	bump_strength:			1.0f,
+	texture_translate:		float2(0.0f),
+	texture_rotate:			0.0f,
+	texture_scale:			float2(1.0f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	0.5,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+
+
+
+
+

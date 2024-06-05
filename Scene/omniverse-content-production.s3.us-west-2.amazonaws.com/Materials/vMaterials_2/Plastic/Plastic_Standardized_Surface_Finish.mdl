@@ -1,0 +1,1630 @@
+/******************************************************************************
+ *     Copyright 2023 NVIDIA Corporation. All rights reserved.
+ ******************************************************************************
+ 
+Permission is hereby granted by NVIDIA Corporation ("NVIDIA"), free of charge,
+to any person obtaining a copy of the sample definition code that uses our 
+Material Definition Language (the "MDL Materials"), to reproduce and distribute
+the MDL Materials, including without limitation the rights to use, copy, merge,
+publish, distribute, and sell modified and unmodified copies of the MDL 
+Materials, and to permit persons to whom the MDL Materials is furnished to do
+so, in all cases solely for use with NVIDIA's Material Definition Language,
+subject to the following further conditions:
+
+1. The above copyright notices, this list of conditions, and the disclaimer
+that follows shall be retained in all copies of one or more of the MDL
+Materials, including in any software with which the MDL Materials are bundled,
+redistributed, and/or sold, and included either as stand-alone text files,
+human-readable headers or in the appropriate machine-readable metadata fields
+within text or binary files as long as those fields can be easily viewed by the
+user, as applicable.
+2. The name of NVIDIA shall not be used to promote, endorse or advertise any 
+Modified Version without specific prior written permission, except a) to comply
+ with the notice requirements otherwise contained herein; or b) to acknowledge
+the contribution(s) of NVIDIA.
+
+THE MDL MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF COPYRIGHT, PATENT,
+TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL NVIDIA CORPORATION BE LIABLE FOR 
+ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY GENERAL, SPECIAL, 
+INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN AN ACTION OF 
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR INABILITY TO USE
+THE MDL MATERIALS OR FROM OTHER DEALINGS IN THE MDL MATERIALS.
+*/
+
+
+mdl 1.6;
+
+import ::anno::*;
+import ::base::*;
+import ::df::*;
+import ::math::*;
+import ::state::*;
+import ::tex::*;
+import ::nvidia::core_definitions::blend_colors;
+import ::nvidia::core_definitions::dimension;
+
+const string COPYRIGHT = 
+" Copyright 2023 NVIDIA Corporation. All rights reserved.\n"
+" MDL MATERIALS ARE PROVIDED PURSUANT TO AN END USER LICENSE  AGREEMENT,\n"
+" WHICH WAS ACCEPTED IN ORDER TO GAIN ACCESS TO THIS FILE.  IN PARTICULAR,\n" 
+" THE MDL MATERIALS ARE PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\n"
+" EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\n"
+" MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF\n" 
+" COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL NVIDIA\n"
+" CORPORATION BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY\n"
+" GENERAL, SPECIAL,  INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN\n"
+" AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR\n"
+" INABILITY TO USE THE MDL MATERIALS OR FROM OTHER DEALINGS IN THE MDL MATERIALS.\n";
+
+const string DESCRIPTION = "A plastic material with a industrial standardized surface finish.";
+
+float remap(float input, float low_1, float high_1, float low_2, float high_2)
+{
+	return low_2 + ((input - low_1) * (high_2 - low_2))/(high_1 - low_1);
+}
+
+float histogram_scan_big(float input, float width, float position)
+{
+	return ::math::clamp(
+				remap(input,
+					::math::lerp(-width, 1.0, position),
+					::math::lerp(0.0, 1.0 + width, position),
+					0.0,
+					1.0),
+				0.0,
+				1.0);
+}
+
+struct vm_coordinates{
+	float2 uv;
+	float rotation;
+	int uv_space_index;
+	float4 carry;
+};
+
+export enum vm_mono_select 
+[[
+    anno::description("Modes for the creation of a gray-scale value from a color"),
+    anno::hidden()
+]]
+{
+	mono_r = 0,
+	mono_g = 1,
+	mono_b = 2,
+	mono_a = 3,
+	mono_average = 4
+};
+
+vm_coordinates vm_coord
+(
+	float2 translation	= float2(0.0f, 0.0) [[
+		::anno::display_name("Translation"),
+		::anno::description("Translates the coordinates")
+	]],
+	float rotation 		= 0.0f [[
+		::anno::display_name("Rotation"),
+		::anno::description("Rotates the coordinates in degrees")
+	]],
+	float2 scaling		= float2(1.0f, 1.0f) [[
+		::anno::display_name("Scaling"),
+		::anno::description("Scales the coordinates")
+	]],	
+	uniform int uv_space = 0 [[
+		::anno::display_name("UV Space"),
+		::anno::description("Chose the UV space")
+	]]
+)
+[[
+		::anno::display_name("vm Transform"),
+		::anno::description("Generates coordinates to be used in vm_lookup functions")
+]]
+{
+	vm_coordinates uv;
+	::base::texture_coordinate_info info = ::base::coordinate_source( ::base::texture_coordinate_uvw, uv_space);
+	uv.rotation = (rotation * 3.1415926535897932384626433832f) / 180.f;
+	uv.uv = float2(info.position.x, info.position.y);
+	float sine   = ::math::sin(uv.rotation);
+	float cosine = ::math::cos(uv.rotation);
+	float2x2 rot = float2x2(cosine, -sine, sine, cosine);
+	uv.uv = rot * uv.uv;
+	uv.uv /= scaling;
+	uv.uv += translation;
+	// Translation before or after rotation?
+	return uv;
+}
+
+::base::texture_return vm_tex_lookup(
+	uniform texture_2d tex,
+	vm_coordinates uv = vm_coord(),
+	uniform vm_mono_select mono_source = mono_a,
+	float4 scale = float4(1.0f))
+{
+	float mono;
+	float4 lookup = ::tex::lookup_float4(tex, uv.uv, ::tex::wrap_repeat, ::tex::wrap_repeat) * scale;
+	switch( mono_source ) {
+		case mono_r: mono = lookup.x;
+			break;
+		case mono_g: mono = lookup.y;
+			break;
+		case mono_b: mono = lookup.z;
+			break;
+		case mono_a: mono = lookup.w;
+			break;
+		case mono_average: mono = ::math::average(float3(lookup.x, lookup.y, lookup.z));
+			break;
+	}
+	return ::base::texture_return(color(lookup.x, lookup.y, lookup.z), mono);
+}
+
+float3 vm_tex_normal_lookup(
+	uniform texture_2d tex,
+	vm_coordinates uv = vm_coord(),
+	float strength = 1.0f
+)
+{
+	float rot = uv.rotation;
+	// Lookup and convert normal texture to -1 ... 1 range
+	float3 norm = (::tex::lookup_float3(tex, uv.uv, ::tex::wrap_repeat, ::tex::wrap_repeat) - float3(.5f)) * 2.0f;
+	norm = ::math::normalize(norm * float3(strength, strength, 1.0));
+	// if any rotation happened prior to the lookup, compensate for it
+	norm = float3(::math::cos(rot) * norm.x - ::math::sin(rot) * norm.y,
+					::math::sin(rot) * norm.x + ::math::cos(rot) * norm.y,
+					norm.z);
+	return norm.x * ::state::texture_tangent_u(uv.uv_space_index) +
+			norm.y * ::state::texture_tangent_v(uv.uv_space_index) +
+			norm.z * ::state::normal();
+}
+
+export material Plastic_Standardized_Surface_Finish(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.07f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 0.13f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.47f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(0.024f, 0.024f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 10.f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = true [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]],
+	// Material presets need to have different scalings. This parameter is required to fit all material presets 
+	// so that the 'normal' texture_scale sits at float2(1.0f)
+	float2 texture_scale_refit = float2(1.f) [[
+        ::anno::description("Adjusts the texture scale for a material."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Advanced"),
+		::anno::hidden(),
+        ::anno::ui_order(11)
+    ]]
+	)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish Template"),
+    ::anno::description("Master template material. This material should be hidden. "
+						"If you see this material, the integration is not hiding it correctly."),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "artificial", "finish", "decorative", "treated", "automotive", "design", "shiny", "new", "black", "dark")),
+	::anno::hidden()
+]]
+ =
+    let {
+        bool tmp0 = false;
+		float2 texture_rescale = texture_scale * texture_scale_refit;
+		float reflection_reweight = 1.0f - reflection_weight;
+		
+        material_surface tmp1(::df::custom_curve_layer(0.0399999991f, 1.f, 5.f, histogram_scan_big(vm_tex_lookup(texture_2d("./textures/mold_01_rough.jpg", ::tex::gamma_linear), vm_coord(texture_translate, texture_rotate, texture_rescale, uv_space_index), mono_a, float4(1.f)).mono, 1.f, reflection_reweight * 0.680000007f), ::df::microfacet_ggx_smith_bsdf(roughness * 0.0700000003f, roughness * 0.0700000003f, color(1.f, 1.f, 1.f), color(0.f, 0.f, 0.f), ::state::texture_tangent_u(0), ::df::scatter_reflect), ::df::weighted_layer(1.0f, ::df::diffuse_reflection_bsdf(plastic_color, 0.f), bsdf(), vm_tex_normal_lookup(texture_2d("./textures/mold_01_norm.jpg", ::tex::gamma_linear), vm_coord(texture_translate, texture_rotate, texture_rescale, uv_space_index), bump_strength)), vm_tex_normal_lookup(texture_2d("./textures/mold_01_norm.jpg", ::tex::gamma_linear), vm_coord(texture_translate, texture_rotate, texture_rescale, uv_space_index), bump_strength)), material_emission(emission: edf(), intensity: color(0.f, 0.f, 0.f), mode: intensity_radiant_exitance));
+        material_surface tmp2 = material_surface(scattering: bsdf(), emission: material_emission(emission: edf(), intensity: color(0.f, 0.f, 0.f), mode: intensity_radiant_exitance));
+        color tmp3 = color(2.30851698f, 2.30851698f, 2.30851698f);
+        material_volume tmp4 = material_volume(scattering: vdf(), absorption_coefficient: color(0.f, 0.f, 0.f), scattering_coefficient: color(0.f, 0.f, 0.f));
+        material_geometry tmp5(float3(0.f), 1.f, roundcorners_enable ? ::state::rounded_corner_normal(roundcorners_radius_mm * 0.00100000005f, roundcorners_across_materials, 1.f) : ::state::normal());
+    } in
+        material(
+            thin_walled: tmp0,
+            surface: tmp1,
+            backface: tmp2,
+            ior: tmp3,
+            volume: tmp4,
+            geometry: tmp5);
+
+// V12
+export material Plastic_Standardized_Surface_Finish_V12(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.2f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 0.3f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.34f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 10.f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = true [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V12"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V12.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 12", "artificial", "finish", "decorative", "treated", "automotive", "design", "shiny", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.0024f)
+);
+
+// V15
+export material Plastic_Standardized_Surface_Finish_V15(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.23f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 0.41f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.34f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 10.f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = true [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V15"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V15.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 15", "artificial", "finish", "decorative", "treated", "automotive", "design", "shiny", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.0048f)
+);
+
+// V18
+export material Plastic_Standardized_Surface_Finish_V18(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.25f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 0.83f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.34f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 10.f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = true [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V18"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V18.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 18", "artificial", "finish", "decorative", "treated", "automotive", "design", "shiny", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.00552f)
+);
+
+// V21
+export material Plastic_Standardized_Surface_Finish_V21(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.25f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 0.83f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.34f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 10.f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = true [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V21"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V21.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 21", "artificial", "finish", "decorative", "treated", "automotive", "design", "shiny", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.006f)
+);
+
+// V24
+export material Plastic_Standardized_Surface_Finish_V24(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.25f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 0.83f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.34f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 10.f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = true [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V24"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V24.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 24", "artificial", "finish", "decorative", "treated", "automotive", "design", "shiny", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.0072f)
+);
+
+
+// V27
+export material Plastic_Standardized_Surface_Finish_V27(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.25f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 0.83f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.34f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 10.f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = true [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V27"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V27.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 27", "artificial", "finish", "decorative", "treated", "automotive", "design", "shiny", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.0084f)
+);
+
+
+// Template for other VDI-like materials which use a different bump map
+export material Plastic_Standardized_Surface_Finish_Template_V2(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic."),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.2f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 1.f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::ui_order(2)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle of the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(4.30000019f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    float reflection_weight = 0.5f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 1.5f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = false [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(10)
+    ]],
+	// Material presets need to have different scalings. This parameter is required to fit all material presets 
+	// so that the 'normal' texture_scale sits at float2(1.0f)
+	float2 texture_scale_refit = float2(0.015f) [[
+        ::anno::description("Adjusts the texture scale for a material."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Advanced"),
+		::anno::hidden(),
+        ::anno::ui_order(11)
+    ]])
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish Template V2"),
+    ::anno::description("Master template material. This material should be hidden."
+						"If you see this material, the integration is not hiding it correctly."),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_Template_V2.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "artificial", "finish", "decorative", "treated", "automotive", "design", "rough", "bumped", "matte", "bumped", "new", "black", "dark")),
+	::anno::hidden()
+]]
+ = 
+    let {
+        bool tmp0 = false;
+		float2 texture_rescale = texture_scale * texture_scale_refit;
+		
+        material_surface tmp1(::df::custom_curve_layer(0.0399999991f, 1.f, 5.f, histogram_scan_big(float3(vm_tex_lookup(texture_2d("./textures/mold_45_r_rough_g_ao.jpg", ::tex::gamma_linear), vm_coord(texture_translate, texture_rotate, texture_rescale, uv_space_index), mono_a, float4(1.f)).tint).y, 0.610000014f, ::math::lerp(0.879999995f, 0.239999995f, reflection_weight)), ::df::microfacet_ggx_smith_bsdf(roughness * 0.199999988f, roughness * 0.199999988f, color(1.f, 1.f, 1.f), color(0.f, 0.f, 0.f), ::state::texture_tangent_u(0), ::df::scatter_reflect), ::df::weighted_layer(1.f, ::df::diffuse_reflection_bsdf(plastic_color, 0.f), bsdf(), vm_tex_normal_lookup(texture_2d("./textures/mold_45_norm.jpg", ::tex::gamma_linear), vm_coord(texture_translate, texture_rotate, texture_rescale, uv_space_index), bump_strength)), vm_tex_normal_lookup(texture_2d("./textures/mold_45_norm.jpg", ::tex::gamma_linear), vm_coord(texture_translate, texture_rotate, texture_rescale, uv_space_index), bump_strength)), material_emission(emission: edf(), intensity: color(0.f, 0.f, 0.f), mode: intensity_radiant_exitance));
+        material_surface tmp2 = material_surface(scattering: bsdf(), emission: material_emission(emission: edf(), intensity: color(0.f, 0.f, 0.f), mode: intensity_radiant_exitance));
+        color tmp3 = color(2.30851698f, 2.30851698f, 2.30851698f);
+        material_volume tmp4 = material_volume(scattering: vdf(), absorption_coefficient: color(0.f, 0.f, 0.f), scattering_coefficient: color(0.f, 0.f, 0.f));
+        material_geometry tmp5(float3(0.f), 1.f, roundcorners_enable ? ::state::rounded_corner_normal(roundcorners_radius_mm * 0.00100000005f, roundcorners_across_materials, 1.f) : ::state::normal());
+		
+    } in
+        material(
+            thin_walled: tmp0,
+            surface: tmp1,
+            backface: tmp2,
+            ior: tmp3,
+            volume: tmp4,
+            geometry: tmp5);
+
+
+// V30
+export material Plastic_Standardized_Surface_Finish_V30(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.2f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 1.0f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.6f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 0.5f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = false [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V30"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V30.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 30", "artificial", "finish", "decorative", "treated", "automotive", "design", "matte", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish_Template_V2(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.0108f)
+);
+
+// V 33
+export material Plastic_Standardized_Surface_Finish_V33(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.2f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 1.0f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.6f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 0.5f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = false [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V33"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V33.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 33", "artificial", "finish", "decorative", "treated", "automotive", "design", "matte", "bumped", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish_Template_V2(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.0168f)
+);
+
+
+// V 36
+export material Plastic_Standardized_Surface_Finish_V36(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.2f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 1.0f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.6f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 0.5f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = false [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V36"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V36.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 36", "artificial", "finish", "decorative", "treated", "automotive", "design", "matte", "bumped", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish_Template_V2(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.0204f)
+);
+
+
+// V 39
+export material Plastic_Standardized_Surface_Finish_V39(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.2f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 1.0f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.6f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 0.5f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = false [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V39"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V39.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 39", "artificial", "finish", "decorative", "treated", "automotive", "design", "matte", "bumped", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish_Template_V2(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.024f)
+);
+
+
+// V 42
+export material Plastic_Standardized_Surface_Finish_V42(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.2f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 1.0f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.6f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 0.5f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = false [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V42"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V42.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 42", "artificial", "finish", "decorative", "treated", "automotive", "design", "matte", "bumped", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish_Template_V2(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.0384f)
+);
+
+
+
+// V 45
+export material Plastic_Standardized_Surface_Finish_V45(
+    color plastic_color = color(0.03f, 0.03f, 0.03f) [[
+        ::anno::description("Choose the color of the plastic"),
+        ::anno::display_name("Plastic Color"),
+        ::anno::in_group("Appearance"),
+        ::anno::ui_order(0)
+    ]],
+    float roughness = 0.2f [[
+        ::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+        ::anno::display_name("Roughness"),
+        ::anno::in_group("Appearance"),
+        ::anno::usage("roughness"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(1)
+    ]],
+    float bump_strength = 1.0f [[
+        ::anno::description("Specifies the strength of the bump."),
+        ::anno::display_name("Bump Strength"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 2.f),
+        ::anno::soft_range(0.f, 1.f),
+        ::anno::ui_order(2)
+    ]],
+    float reflection_weight = 0.6f [[
+        ::anno::description("Amount of reflection, higher numbers provide more reflection."),
+        ::anno::display_name("Reflection Weight"),
+        ::anno::in_group("Appearance"),
+        ::anno::hard_range(0.f, 1.f),
+        ::anno::ui_order(7)
+    ]],
+    float2 texture_translate = float2(0.f) [[
+        ::anno::description("Controls the position of the texture."),
+        ::anno::display_name("Texture Translate"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(3)
+    ]],
+    float texture_rotate = 0.f [[
+        ::anno::description("Rotates angle ofy the texture in degrees."),
+        ::anno::display_name("Texture Rotate"),
+        ::anno::in_group("Transform"),
+        ::anno::soft_range(0.f, 360.f),
+        ::anno::ui_order(4)
+    ]],
+    float2 texture_scale = float2(1.f) [[
+        ::anno::description("Larger numbers increase the size."),
+        ::anno::display_name("Texture Scale"),
+        ::anno::in_group("Transform"),
+		::nvidia::core_definitions::dimension(float2(1.0f, 1.0f)),
+        ::anno::ui_order(5)
+    ]],
+    uniform int uv_space_index = 0 [[
+        ::anno::description("Uses selected UV space for material."),
+        ::anno::display_name("UV Space Index"),
+        ::anno::in_group("Transform"),
+        ::anno::ui_order(6)
+    ]],
+    uniform bool roundcorners_enable = false [[
+        ::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect."),
+        ::anno::display_name("Enable Round Corners"),
+        ::anno::in_group("Round Corners"),
+        ::anno::ui_order(8)
+    ]],
+    uniform float roundcorners_radius_mm = 0.5f [[
+        ::anno::description("Radius of the rounded corners in millimeters."),
+        ::anno::display_name("Round Corner Radius (mm)"),
+        ::anno::in_group("Round Corners"),
+        ::anno::soft_range(0.f, 10.f),
+        ::anno::ui_order(9)
+    ]],
+    uniform bool roundcorners_across_materials = false [[
+        ::anno::description("Applies the round corner effect across different materials when enabled."),
+        ::anno::display_name("Across Materials"),
+        ::anno::in_group("Round Corners."),
+        ::anno::ui_order(10)
+    ]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Rüdiger Raab"),
+    ::anno::display_name("Plastic - Industrial Surface Finish V45"),
+    ::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Plastic_Standardized_Surface_Finish.Plastic_Standardized_Surface_Finish_V45.png"),
+	::anno::key_words(string[]("plastic", "industrial", "VDI", "VDI 45", "artificial", "finish", "decorative", "treated", "automotive", "design", "matte", "bumped", "new", "black", "dark"))
+]] = 
+Plastic_Standardized_Surface_Finish_Template_V2(
+	plastic_color:                 plastic_color,
+	roughness:                 	   roughness,
+	bump_strength:                 bump_strength,
+	reflection_weight:             reflection_weight,
+	texture_translate:             texture_translate,
+	texture_rotate:                texture_rotate,
+	texture_scale:                 texture_scale,
+	uv_space_index:                uv_space_index,
+	roundcorners_enable:           roundcorners_enable,
+	roundcorners_radius_mm:        roundcorners_radius_mm,
+	roundcorners_across_materials: roundcorners_across_materials,
+	texture_scale_refit:		   float2(0.1032f)
+);

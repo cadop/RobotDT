@@ -1,0 +1,117 @@
+﻿mdl 1.3;
+
+import ::math::*;
+import ::state::*;
+import ::tex::*;
+import ::anno::*;
+using OmniUe4Function import *;
+using OmniUe4Base import *;
+
+export annotation sampler_color();
+export annotation sampler_normal();
+export annotation sampler_grayscale();
+export annotation sampler_alpha();
+export annotation sampler_masks();
+export annotation sampler_distancefield();
+export annotation dither_masked_off();
+export annotation world_space_normal();
+
+export material M_Sky_Panning_Clouds2(
+	float4 ZenithColor = float4(0.085177,0.153746,0.35,1.0),
+	float Starsbrightness = 0.1,
+	float Sunheight = 1.0,
+	float4 Horizoncolor = float4(0.940601,1.0,1.0,1.0),
+	float HorizonFalloff = 3.0,
+	float4 Lightdirection = float4(-2.0,0.0,-1.0,1.0),
+	float SunRadius = 0.0003,
+	float4 Suncolor = float4(1.0,0.8,0.4,1.0),
+	float Sunbrightness = 50.0,
+	float4 Cloudcolor = float4(0.71685,0.782221,0.885,0.0),
+	float Cloudspeed = 0.1,
+	float Cloudopacity = 1.0,
+	float NoisePower1 = 1.0,
+	float NoisePower2 = 4.0,
+	float4 OverallColor = float4(1.0,1.0,1.0,1.0))
+ = 
+	let {
+	float3 WorldPositionOffset_mdl = float3(0.0,0.0,0.0);
+	float2 CustomizedUV0_mdl = float2(state::texture_coordinate(0).x,1.0-state::texture_coordinate(0).y);
+	float2 CustomizedUV1_mdl = float2(state::texture_coordinate(1).x,1.0-state::texture_coordinate(1).y);
+
+
+
+	float2 Local0 = (CustomizedUV1_mdl * 12.0);
+	float4 Local1 = tex::lookup_float4(texture_2d("./Textures/T_Sky_Stars.png",::tex::gamma_srgb),float2(Local0.x,1.0-Local0.y),tex::wrap_repeat,tex::wrap_repeat);
+	float3 Local2 = (float3(Local1.x,Local1.y,Local1.z) * Starsbrightness);
+	float3 Local3 = (Local2 * Sunheight);
+	float3 Local4 = (float3(ZenithColor.x,ZenithColor.y,ZenithColor.z) + Local3);
+	float Local5 = math::dot(::camera_vector(), float3(0.0,0.0,-1.0));
+	float Local6 = math::min(math::max(Local5,0.0),1.0);
+	float Local7 = (1.0 - Local6);
+	float Local8 = math::pow(Local7,HorizonFalloff);
+	float Local9 = math::min(math::max(Local8,0.0),1.0);
+	float3 Local10 = math::lerp(Local4,float3(Horizoncolor.x,Horizoncolor.y,Horizoncolor.z),Local9);
+	float Local11 = math::dot(float3(Lightdirection.x,Lightdirection.y,Lightdirection.z), float3(Lightdirection.x,Lightdirection.y,Lightdirection.z));
+	float Local12 = math::sqrt(Local11);
+	float3 Local13 = (float3(Lightdirection.x,Lightdirection.y,Lightdirection.z) / Local12);
+	float Local14 = math::dot(::camera_vector(), Local13);
+	float Local15 = (Local14 - 1.0);
+	float Local16 = math::abs(Local15);
+	float Local17 = math::max(0.00001,SunRadius);
+	float Local18 = (1.0 / Local17);
+	float Local19 = (Local16 * Local18);
+	float Local20 = (1.0 - Local19);
+	float Local21 = (Local20 * 1.0);
+	float Local22 = math::min(math::max(Local21,0.0),1.0);
+	float3 Local23 = (float3(Suncolor.x,Suncolor.y,Suncolor.z) * Sunbrightness);
+	float3 Local24 = (Local22 * Local23);
+	float3 Local25 = (Local10 + Local24);
+	float Local26 = (state::animation_time() * Cloudspeed);
+	float Local27 = (Local26 * 0.0002);
+	float Local28 = (Local26 * 0.0);
+	float2 Local29 = (float2(Local27,Local28) + CustomizedUV0_mdl);
+	float4 Local30 = tex::lookup_float4(texture_2d("./Textures/T_Sky_Blue.png",::tex::gamma_srgb),float2(Local29.x,1.0-Local29.y),tex::wrap_repeat,tex::wrap_repeat);
+	float Local31 = (Local26 * 0.001);
+	float2 Local32 = (float2(Local31,Local28) + CustomizedUV0_mdl);
+	float4 Local33 = ::greyscale_texture_lookup(tex::lookup_float4(texture_2d("./Textures/T_Sky_Clouds_M.png",::tex::gamma_srgb),float2(Local32.x,1.0-Local32.y),tex::wrap_repeat,tex::wrap_repeat));
+	float Local34 = math::lerp(Local30.x,Local33.x,Local6);
+	float3 Local35 = ((state::transform_point(state::coordinate_internal,state::coordinate_world,state::position())*state::meters_per_scene_unit()*100.0) - float3(0));
+	float Local36 = (100.0 * -0.1);
+	float3 Local37 = (Local35 / Local36);
+	float Local38 = math::min(math::max(Local37.z,0.0),1.0);
+	float Local39 = (1.0 - Local38);
+	float Local40 = (Local39 * Cloudopacity);
+	float Local41 = math::lerp(0.0,Local34,Local40);
+	float2 Local42 = (CustomizedUV0_mdl * 0.5);
+	float4 Local43 = ::greyscale_texture_lookup(tex::lookup_float4(texture_2d("./Textures/T_Sky_Clouds_M.png",::tex::gamma_srgb),float2(Local42.x,1.0-Local42.y),tex::wrap_repeat,tex::wrap_repeat));
+	float Local44 = math::lerp(NoisePower1,NoisePower2,Local43.x);
+	float Local45 = math::pow(Local41,Local44);
+	float3 Local46 = (float3(Cloudcolor.x,Cloudcolor.y,Cloudcolor.z) * Local45);
+	float Local47 = math::max(0.00001,1.3);
+	float Local48 = (1.0 / Local47);
+	float Local49 = (Local16 * Local48);
+	float Local50 = (1.0 - Local49);
+	float Local51 = (Local50 * 1.0);
+	float Local52 = math::min(math::max(Local51,0.0),1.0);
+	float Local53 = math::pow(Local52,10.0);
+	float Local54 = math::min(math::max(Local53,0.0),1.0);
+	float3 Local55 = (Local54 * float3(Suncolor.x,Suncolor.y,Suncolor.z));
+	float Local56 = (Local45 * Local45);
+	float Local57 = (Local56 * 0.4);
+	float3 Local58 = (Local55 * Local57);
+	float3 Local59 = (Local46 + Local58);
+	float Local60 = math::min(math::max(Local56,0.0),1.0);
+	float3 Local61 = math::lerp(Local25,Local59,Local60);
+	float3 Local62 = (Local61 * float3(OverallColor.x,OverallColor.y,OverallColor.z));
+	float3 Local63 = (Local62 * 1.5);
+
+	float3 EmissiveColor_mdl = Local63;
+	float OpacityMask_mdl = 1.0;
+
+	} in
+		::OmniUe4Base(
+			opacity: OpacityMask_mdl,
+			emissive_color: EmissiveColor_mdl,
+			displacement: WorldPositionOffset_mdl,
+			two_sided: false,
+			is_unlit: true);

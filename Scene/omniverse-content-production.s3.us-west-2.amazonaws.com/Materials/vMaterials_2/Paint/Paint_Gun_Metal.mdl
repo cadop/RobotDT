@@ -1,0 +1,280 @@
+/******************************************************************************
+ *     Copyright 2023 NVIDIA Corporation. All rights reserved.
+ ******************************************************************************
+ 
+Permission is hereby granted by NVIDIA Corporation ("NVIDIA"), free of charge,
+to any person obtaining a copy of the sample definition code that uses our 
+Material Definition Language (the "MDL Materials"), to reproduce and distribute
+the MDL Materials, including without limitation the rights to use, copy, merge,
+publish, distribute, and sell modified and unmodified copies of the MDL 
+Materials, and to permit persons to whom the MDL Materials is furnished to do
+so, in all cases solely for use with NVIDIA's Material Definition Language,
+subject to the following further conditions:
+
+1. The above copyright notices, this list of conditions, and the disclaimer
+that follows shall be retained in all copies of one or more of the MDL
+Materials, including in any software with which the MDL Materials are bundled,
+redistributed, and/or sold, and included either as stand-alone text files,
+human-readable headers or in the appropriate machine-readable metadata fields
+within text or binary files as long as those fields can be easily viewed by the
+user, as applicable.
+2. The name of NVIDIA shall not be used to promote, endorse or advertise any 
+Modified Version without specific prior written permission, except a) to comply
+ with the notice requirements otherwise contained herein; or b) to acknowledge
+the contribution(s) of NVIDIA.
+
+THE MDL MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF COPYRIGHT, PATENT,
+TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL NVIDIA CORPORATION BE LIABLE FOR 
+ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY GENERAL, SPECIAL, 
+INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN AN ACTION OF 
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR INABILITY TO USE
+THE MDL MATERIALS OR FROM OTHER DEALINGS IN THE MDL MATERIALS.
+*/
+
+mdl 1.4;
+import ::df::*;
+import ::base::*;
+import ::anno::*;
+import ::nvidia::core_definitions::dimension;
+
+const string COPYRIGHT = 
+" Copyright 2023 NVIDIA Corporation. All rights reserved.\n"
+" MDL MATERIALS ARE PROVIDED PURSUANT TO AN END USER LICENSE  AGREEMENT,\n"
+" WHICH WAS ACCEPTED IN ORDER TO GAIN ACCESS TO THIS FILE.  IN PARTICULAR,\n" 
+" THE MDL MATERIALS ARE PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\n"
+" EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\n"
+" MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF\n" 
+" COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL NVIDIA\n"
+" CORPORATION BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY\n"
+" GENERAL, SPECIAL,  INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN\n"
+" AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR\n"
+" INABILITY TO USE THE MDL MATERIALS OR FROM OTHER DEALINGS IN THE MDL MATERIALS.\n";
+
+
+// remaps a 0...1 value to lie between min and max
+float remap(float x, float min, float max)
+{
+	return min + x * (max - min);
+}
+
+
+export material Paint_Gun_Metal (
+    uniform color base_color  = color(0.08) 
+    [[ 
+        ::anno::display_name("Base color"),
+        ::anno::description("The base color of the material"),
+		::anno::in_group("Appearance")
+    ]],
+    uniform float flake_amount        = .25         
+    [[ 
+        ::anno::display_name("Flake Amount"),
+        ::anno::soft_range(0.0, 1.0),
+        ::anno::description("The amount of metal flakes in the material"),
+		::anno::in_group("Appearance")
+    ]],
+    uniform float particle_size = .1           
+    [[ 
+        ::anno::display_name("Particle Size"), 
+        ::anno::soft_range(0.0, 1.0),
+        ::anno::description("The size of the particles in millimeters. If the paticles don't appear "
+		"at all, check whether you are using the correct units in yout scene. The materials is built to "
+		"use meters as scene unit"),
+		::anno::in_group("Appearance")
+    ]],
+	uniform float3 texture_scale = float3(1.0f)
+	[[
+		::anno::hidden(),
+		::anno::display_name("Scale"),
+		::anno::description("An additional linear controller for controlling the dimension"),
+		::anno::in_group("Flakes Layer"),
+		::nvidia::core_definitions::dimension(float3(1.0f, 1.0f, 1.0f))
+	]]
+) [[ 
+	::anno::author("NVIDIA vMaterials"),
+    ::anno::display_name("Gun Metal Paint"),
+    ::anno::description("Gun metal material"),
+	::anno::key_words(string[]("design", "metal", "gunmetal", "flakes", "effect", "paint", "car", "rim", "new", "automotive", "wheel", "matte")),
+	::anno::thumbnail("./.thumbs/Paint_Gun_Metal.Paint_Gun_Metal.png"),
+    ::anno::copyright_notice(COPYRIGHT),
+	::anno::hidden()
+]] = let
+{
+    color flake_color               = color(1,1,1);
+    float flake_intensity           = .8;
+    float flake_roughness           = .3;
+    float flake_bumpiness           = .25;
+	
+	// Scaling the particle size parameters to give the right average size of
+	// the particles in the render
+	uniform float flake_scale  = particle_size * 0.0008;
+	
+	float flake_amount_2 = remap(flake_amount, 0.2, 0.6);
+    
+    ::base::texture_coordinate_info uvw = ::base::coordinate_source(coordinate_system: ::base::texture_coordinate_object);
+	
+	::base::texture_coordinate_info transformed_uvw = 
+								::base::transform_coordinate(
+									transform: ::base::rotation_translation_scale(
+												rotation: float3(0.0f),
+												translation: float3(0.0f),
+												scaling: texture_scale
+									),
+									coordinate: uvw
+	);
+
+    bsdf flake         = ::df::simple_glossy_bsdf(
+                            roughness_u: flake_roughness,
+                            tint: flake_color
+    );
+    
+    bsdf base          = ::df::diffuse_reflection_bsdf (
+                            tint: base_color * 0.2
+    );
+    
+    float3 flake_bump  = ::base::flake_noise_bump_texture( 
+                            uvw:         transformed_uvw,
+                            strength:    flake_bumpiness,
+                            scale:       particle_size*flake_scale
+    );
+    
+    float flake_weight = ::base::flake_noise_texture( 
+                            uvw:         transformed_uvw,
+                            intensity:   flake_intensity,
+                            scale:       particle_size*flake_scale,
+                            density:     flake_amount_2
+    ).mono;
+    
+} in material (
+    surface: material_surface (
+        scattering: ::df::weighted_layer(
+                weight: flake_weight,
+                normal: flake_bump,
+                layer: flake,    
+                base: base
+        )
+    )
+);
+
+
+export material Paint_Gun_Metal_Black_0(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+    ::anno::display_name("Gun Metal - Black 0"),
+    ::anno::description("A black gun metal effect paint"),
+	::anno::key_words(string[]("design", "metal", "paint", "flakes", "effect", "car", "automotive", "rim", "wheel", "spraypaint", "shiny", "black")),
+	::anno::thumbnail("./.thumbs/Paint_Gun_Metal.Paint_Gun_Metal_Black_0.png"),
+    ::anno::copyright_notice(COPYRIGHT)
+]] = Paint_Gun_Metal(
+	base_color: color(0.08),
+	flake_amount: 0.0f,
+	particle_size: .15
+);
+
+
+export material Paint_Gun_Metal_Black_25(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+    ::anno::display_name("Gun Metal - Black 25"),
+    ::anno::description("A black gun metal effect paint"),
+	::anno::key_words(string[]("design", "metal", "paint", "flakes", "effect", "car", "automotive", "rim", "wheel", "spraypaint", "shiny", "black")),
+	::anno::thumbnail("./.thumbs/Paint_Gun_Metal.Paint_Gun_Metal_Black_25.png"),
+    ::anno::copyright_notice(COPYRIGHT)
+]] = Paint_Gun_Metal(
+	base_color: color(0.08),
+	flake_amount: 0.25f,
+	particle_size: .15
+);
+
+
+
+export material Paint_Gun_Metal_Black_50(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+    ::anno::display_name("Gun Metal - Black 50"),
+    ::anno::description("A black gun metal effect paint"),
+	::anno::key_words(string[]("design", "metal", "paint", "flakes", "effect", "car", "automotive", "rim", "wheel", "spraypaint", "shiny", "black")),
+	::anno::thumbnail("./.thumbs/Paint_Gun_Metal.Paint_Gun_Metal_Black_50.png"),
+    ::anno::copyright_notice(COPYRIGHT)
+]] = Paint_Gun_Metal(
+	base_color: color(0.08),
+	flake_amount: 0.50f,
+	particle_size: .15
+);
+
+
+
+export material Paint_Gun_Metal_Black_75(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+    ::anno::display_name("Gun Metal - Black 75"),
+    ::anno::description("A black gun metal effect paint"),
+	::anno::key_words(string[]("design", "metal", "paint", "flakes", "effect", "car", "automotive", "rim", "wheel", "spraypaint", "shiny", "black")),
+	::anno::thumbnail("./.thumbs/Paint_Gun_Metal.Paint_Gun_Metal_Black_75.png"),
+    ::anno::copyright_notice(COPYRIGHT)
+]] = Paint_Gun_Metal(
+	base_color: color(0.08),
+	flake_amount: 0.75f,
+	particle_size: .15
+);
+
+
+export material Paint_Gun_Metal_Gray_0(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+    ::anno::display_name("Gun Metal - Gray 0"),
+    ::anno::description("A dark gray gun metal paint material"),
+	::anno::key_words(string[]("design", "metal", "paint", "flakes", "effect", "car", "automotive", "rim", "wheel", "spraypaint", "shiny", "gray", "dark")),
+	::anno::thumbnail("./.thumbs/Paint_Gun_Metal.Paint_Gun_Metal_Gray_0.png"),
+    ::anno::copyright_notice(COPYRIGHT)
+]] = Paint_Gun_Metal(
+	base_color: color(0.284),
+	flake_amount: 0.0f,
+	particle_size: .30
+);
+
+
+export material Paint_Gun_Metal_Gray_25(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+    ::anno::display_name("Gun Metal - Gray 25"),
+    ::anno::description("A dark gray gun metal paint material"),
+	::anno::key_words(string[]("design", "metal", "paint", "flakes", "effect", "car", "automotive", "rim", "wheel", "spraypaint", "shiny", "gray", "dark")),
+	::anno::thumbnail("./.thumbs/Paint_Gun_Metal.Paint_Gun_Metal_Gray_25.png"),
+    ::anno::copyright_notice(COPYRIGHT)
+]] = Paint_Gun_Metal(
+	base_color: color(0.284),
+	flake_amount: 0.25,
+	particle_size: .30
+);
+
+
+export material Paint_Gun_Metal_Gray_50(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+    ::anno::display_name("Gun Metal - Gray 50"),
+    ::anno::description("A dark gray gun metal paint material"),
+	::anno::key_words(string[]("design", "metal", "paint", "flakes", "effect", "car", "automotive", "rim", "wheel", "spraypaint", "shiny", "gray", "dark")),
+	::anno::thumbnail("./.thumbs/Paint_Gun_Metal.Paint_Gun_Metal_Gray_50.png"),
+    ::anno::copyright_notice(COPYRIGHT)
+]] = Paint_Gun_Metal(
+	base_color: color(0.284),
+	flake_amount: 0.50,
+	particle_size: .30
+);
+
+
+export material Paint_Gun_Metal_Gray_75(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+    ::anno::display_name("Gun Metal - Gray 75"),
+    ::anno::description("A dark gray gun metal paint material"),
+	::anno::key_words(string[]("design", "metal", "paint", "flakes", "effect", "car", "automotive", "rim", "wheel", "spraypaint", "shiny", "gray", "dark")),
+	::anno::thumbnail("./.thumbs/Paint_Gun_Metal.Paint_Gun_Metal_Gray_75.png"),
+    ::anno::copyright_notice(COPYRIGHT)
+]] = Paint_Gun_Metal(
+	base_color: color(0.284),
+	flake_amount: 0.75,
+	particle_size: .30
+);

@@ -1,0 +1,629 @@
+/******************************************************************************
+ *	 Copyright 2023 NVIDIA Corporation. All rights reserved.	 *
+ ******************************************************************************
+ 
+Permission is hereby granted by NVIDIA Corporation ("NVIDIA"), free of charge,
+to any person obtaining a copy of the sample definition code that uses our 
+Material Definition Language (the "MDL Materials"), to reproduce and distribute
+the MDL Materials, including without limitation the rights to use, copy, merge,
+publish, distribute, and sell modified and unmodified copies of the MDL 
+Materials, and to permit persons to whom the MDL Materials is furnished to do
+so, in all cases solely for use with NVIDIA's Material Definition Language,
+subject to the following further conditions:
+
+1. The above copyright notices, this list of conditions, and the disclaimer
+that follows shall be retained in all copies of one or more of the MDL
+Materials, including in any software with which the MDL Materials are bundled,
+redistributed, and/or sold, and included either as stand-alone text files,
+human-readable headers or in the appropriate machine-readable metadata fields
+within text or binary files as long as those fields can be easily viewed by the
+user, as applicable.
+2. The name of NVIDIA shall not be used to promote, endorse or advertise any 
+Modified Version without specific prior written permission, except a) to comply
+ with the notice requirements otherwise contained herein; or b) to acknowledge
+the contribution(s) of NVIDIA.
+
+THE MDL MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF COPYRIGHT, PATENT,
+TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL NVIDIA CORPORATION BE LIABLE FOR 
+ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY GENERAL, SPECIAL, 
+INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN AN ACTION OF 
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR INABILITY TO USE
+THE MDL MATERIALS OR FROM OTHER DEALINGS IN THE MDL MATERIALS.
+*/
+
+mdl 1.4;
+
+import ::anno::*;
+import ::base::*;
+import ::df::*;
+import ::math::*;
+import ::state::*;
+import ::tex::*;
+import ::nvidia::core_definitions::blend_colors;
+import ::nvidia::core_definitions::dimension;
+
+const string COPYRIGHT = 
+" Copyright 2023 NVIDIA Corporation. All rights reserved.\n"
+" MDL MATERIALS ARE PROVIDED PURSUANT TO AN END USER LICENSE  AGREEMENT,\n"
+" WHICH WAS ACCEPTED IN ORDER TO GAIN ACCESS TO THIS FILE.  IN PARTICULAR,\n" 
+" THE MDL MATERIALS ARE PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\n"
+" EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\n"
+" MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF\n" 
+" COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL NVIDIA\n"
+" CORPORATION BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY\n"
+" GENERAL, SPECIAL,  INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN\n"
+" AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR\n"
+" INABILITY TO USE THE MDL MATERIALS OR FROM OTHER DEALINGS IN THE MDL MATERIALS.\n";
+
+
+
+::base::texture_coordinate_info vmat_transform(
+								uniform float2 translation = float2(0.0, 0.0),
+								uniform float rotation	 = 0.0,
+								uniform float2 scaling	 = float2(1.0, 1.0),
+								uniform ::base::texture_coordinate_system system = ::base::texture_coordinate_uvw,
+								uniform int uv_space	   = 0
+)
+{
+	float rotation_rad = (rotation * 3.1415926535897932384626433832f) / 180.f;
+	
+	float4x4 scale =
+	float4x4(1.0 /scaling.x, 0.			 ,  0. ,	 0.,
+			 0.			, 1.0 /scaling.y ,  0. ,	 0.,
+			 0.			, 0.			 ,  1.0,	 0.,
+			 translation.x , translation.y  ,  0.0,	 1.);
+
+	float s = ::math::sin(rotation_rad);
+	float c = ::math::cos(rotation_rad);
+	float4x4 rotate =
+	float4x4(  c  ,  -s   , 0.0 , 0.0,
+			   s  ,   c   , 0.0 , 0.0,
+			   0.0,   0.0 , 1.0 , 0.0,
+			   0. ,   0.0 , 0.0 , 1.);
+	
+	return ::base::transform_coordinate(scale*rotate, ::base::coordinate_source(system, uv_space));
+}
+
+
+float histogram_range(float input, float range, float position)
+{	
+	float low = ::math::clamp(1.0 - ::math::min(((1.0 - position) + range * 0.5), (1.0 - position) * 2), 0.0, 1.0);
+	float high = ::math::clamp(::math::min((position + range * 0.5 ), position * 2.0), 0.0, 1.0);
+	return ::math::lerp(low, high, input);
+}
+
+
+
+float uint2float(int x)
+{
+	return float(x & 0x7FFFFFFF) + (x < 0 ? 2147483648.0 : 0.0);
+}
+
+int lowbias32(int x)
+{
+	x ^= x >>> 16;
+	x *= 0x7feb352d;
+	x ^= x >>> 15;
+	x *= 0x846ca68b;
+	x ^= x >>> 16;
+	return x;
+}
+
+float2 rnd22(int2 p) {
+	float2 ret_val = float2(
+		uint2float(lowbias32(p[0] + lowbias32(p[1]))) / 4294967296.f,
+		uint2float(lowbias32(p[0] + 32000 + lowbias32(p[1]))) / 4294967296.f
+	);
+	return ret_val;
+}	
+
+float3 srgb2rgb(float3 val)
+{
+	return ::math::pow(::math::max(val, float3(0.0f)), 2.2);
+}
+
+float2x2 invert_2x2(float2x2 M)
+{
+	float det = M[0][0]*M[1][1] - M[0][1]*M[1][0];
+	//https://www.chilimath.com/lessons/advanced-algebra/inverse-of-a-2x2-matrix/
+	return (1.0 / det) * float2x2(M[1][1], -M[0][1], -M[1][0], M[0][0]);
+}
+
+float3 nonrepeat_lookup(
+	uniform texture_2d texture = texture_2d(),
+	::base::texture_coordinate_info uvw = ::base::coordinate_source(),
+	float texture_scale = 1.0,
+	float3 average_color = float3(0.5),
+	float patch_size = 8.0
+)
+{
+	
+	float2 uv_in = float2(uvw.position[0], uvw.position[1]) * texture_scale;
+	float Z =  patch_size;	 // patch scale inside example texture
+	float CON = 1.0f;
+	
+	float3 O = float3(0.f);
+	float2x2 M0 = float2x2(1.f,0.f, 0.5f, ::math::sqrt(3.f)/2.f);
+	float2x2 M = invert_2x2(M0); // transform matrix <-> tilted space
+	
+	float2 U = uv_in;
+	float2 V = M * uv_in; //pre-tilted hexa coordinates
+	int2 I = int2(::math::floor(V)); // hexa-tile id
+	
+	// The mean color needs to be determined in Photoshop then to make the
+	// average color work out, take the float value and calculate the apropriate
+	// mean value as (value^(1/2.2))
+
+	float3 m = average_color;
+	
+	float3 F = float3(::math::frac(V)[0], ::math::frac(V)[1], 0.f), W;
+	F[2] = 1.0 - F[0] - F[1]; // local hexa coordinates
+	
+	if( F[2] > 0.f )
+
+		O = (W[0] = F[2]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I))) - m*float(CON))
+		  + (W[1] = F[1]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(0,1)))) - m*float(CON))
+		  + (W[2] = F[0]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(1,0)))) - m*float(CON));
+	else
+		O = (W[0] =	  -F[2]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(1))))   - m*float(CON))
+		  + (W[1] = 1.f - F[1]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(1, 0)))) - m*float(CON))
+		  + (W[2] = 1.f - F[0]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(0, 1)))) - m*float(CON));
+	O = m + O/::math::length(W);
+	O = ::math::clamp( (O), 0.0, 1.0);
+	
+	return float3(O);
+}
+
+color endless_texture(
+	uniform texture_2d texture = texture_2d(),
+	::base::texture_coordinate_info uvw = ::base::coordinate_source(),
+	float texture_scale = 10.0,
+	float3 average_color = float3(0.5, 0.5, 1.0),
+	float patch_size = 8.0,
+	bool gamma_correct_lookup = true
+)
+{
+	return gamma_correct_lookup ? color(srgb2rgb(
+			nonrepeat_lookup (
+				texture: texture,
+				uvw: uvw,
+				texture_scale: texture_scale,
+				average_color: average_color,
+				patch_size: patch_size
+			))
+		) : color(nonrepeat_lookup (
+			texture: texture,
+			uvw: uvw,
+			texture_scale: texture_scale,
+			average_color: average_color,
+			patch_size: patch_size
+		));
+}
+
+float3 endless_normal(
+	uniform texture_2d texture = texture_2d(),
+	float factor = 1.0,
+	bool flip_tangent_u = false,
+	bool flip_tangent_v = false,
+	::base::texture_coordinate_info uvw = ::base::coordinate_source(),
+	float texture_scale = 1.0,
+	float3 average_color = float3(0.5, 0.5, 1.0),
+	float patch_size = 8.0
+)
+{
+	float3 transformed_tangent_u = flip_tangent_u ? uvw.tangent_u : - uvw.tangent_u;
+	float3 transformed_tangent_v = flip_tangent_v ? uvw.tangent_v : - uvw.tangent_v;
+	
+	if (flip_tangent_u)
+		transformed_tangent_u=-transformed_tangent_u;
+	if (flip_tangent_v)
+		transformed_tangent_v=-transformed_tangent_v;
+
+	// normalized Lookup
+	float3 tangent_space_normal =
+		 (nonrepeat_lookup (
+			texture: texture,
+			uvw: uvw,
+			texture_scale: texture_scale,
+			average_color: average_color,
+			patch_size: patch_size
+		) - 0.5) * (2.0 * factor);
+		
+	 return ::math::normalize(uvw.tangent_u * tangent_space_normal.x +
+		  uvw.tangent_v * tangent_space_normal.y +
+		  ::state::normal()*1.0); 
+}
+
+export enum palette_color
+[[
+	::anno::description("Palette Color"),
+	::anno::hidden() 
+]]
+{
+    chalk_white
+		[[ ::anno::display_name("Chalk White")]],
+    winter_gray
+		[[ ::anno::display_name("Winter Gray")]],
+    ash
+		[[ ::anno::display_name("Ash")]],
+	sunrise
+		[[ ::anno::display_name("Sunrise") ]],
+	sand
+		[[ ::anno::display_name("Sand") ]],
+	caramel
+		[[ ::anno::display_name("Caramel") ]],
+	mustard
+		[[ ::anno::display_name("Mustard") ]],
+	coral
+		[[ ::anno::display_name("Coral") ]],
+	madera
+		[[ ::anno::display_name("Madera") ]],
+	cocoa
+		[[ ::anno::display_name("Cocoa") ]],
+	petrol
+		[[ ::anno::display_name("Petrol") ]],
+	mesa_verse
+		[[ ::anno::display_name("Mesa Verde") ]],
+	eukalyptus
+		[[ ::anno::display_name("Eukalyptus") ]],
+	sage
+		[[ ::anno::display_name("Sage") ]],
+	anthracite
+		[[ ::anno::display_name("Anthracite") ]],
+	graphite
+		[[ ::anno::display_name("Graphite") ]]	,
+	ink_blue
+		[[ ::anno::display_name("Ink Blue") ]],
+	pigeon_blue
+		[[ ::anno::display_name("Pigeon Blue") ]]
+};
+
+
+export material Stucco(
+	uniform bool infinite_tiling = true [[
+		::anno::description("Enables infinite tiling feature which removes repeating texture patterns. Note that depending on the material this feature changes the appearance of the material slightly."),
+		::anno::display_name("Infinite Tiling"),
+		::anno::in_group("Appearance")
+	]],
+	color wall_color = color(0.823529f) [[
+		::anno::description("Color of the Stucco"),
+		::anno::display_name("Wall Color"),
+		::anno::in_group("Appearance"),
+		::anno::enable_if("use_palette_color!=true")
+	]],
+	bool use_palette_color = false
+	[[
+		::anno::description("When enabled, use one of the predefined colors from the list"),
+		::anno::display_name("Use palette color"),
+		::anno::in_group("Appearance")
+	]],
+	uniform palette_color color_selection = chalk_white
+	[[
+		::anno::description("Choose a predefined color from a palette"),
+		::anno::display_name("Palette Color"),
+		::anno::in_group("Appearance"),
+		::anno::enable_if("use_palette_color==true")
+	]],
+	float reflection_roughness = 0.59f [[
+		::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+		::anno::display_name("Roughness"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f)
+	]],
+	float roughness_variation = 0.29 [[
+		::anno::description("Sets how much the roughness is varying"),
+		::anno::display_name("Roughness Variation"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f)
+	]],
+	float dirt_stucco = 0.14f [[
+		::anno::description("Amount of visible dirt on the stucco surface"),
+		::anno::display_name("Dirt Stucco"),
+		::anno::in_group("Appearance", "Dirt"),
+		::anno::hard_range(0.f, 1.f)
+	]],
+	float dirt_grunge = 0.02f [[
+		::anno::description("Amount of visible grunge dirt"),
+		::anno::display_name("Dirt Grunge"),
+		::anno::in_group("Appearance", "Dirt"),
+		::anno::hard_range(0.f, 1.f)
+	]],
+	float dirt_deposits = 0.f [[
+		::anno::description("Amount of visible dirt deposits"),
+		::anno::display_name("Dirt Deposits"),
+		::anno::in_group("Appearance", "Dirt"),
+		::anno::hard_range(0.f, 1.f)
+	]],
+	float normal_stucco = 0.35f [[
+		::anno::description("Sets the strength of the normal stucco contribution"),
+		::anno::display_name("Normal Stucco"),
+		::anno::in_group("Appearance", "Normal"),
+		::anno::hard_range(0.f, 2.f)
+	]],
+	float normal_grunge = 0.f [[
+		::anno::description("Sets the strength of the grunge normal "),
+		::anno::display_name("Normal Grunge"),
+		::anno::in_group("Appearance", "Normal"),
+		::anno::hard_range(0.f, 2.f)
+	]],
+	float normal_deposits = .53f [[
+		::anno::description("Sets the bump strength of the deposits"),
+		::anno::display_name("Normal Deposits"),
+		::anno::in_group("Appearance", "Normal"),
+		::anno::hard_range(0.f, 2.f)
+	]],
+	color dirt_color = color(0.071761f, 0.044553f, 0.032876f) [[
+		::anno::description("Sets the color of the dirt which is layered on the stucco"),
+		::anno::display_name("Dirt Color"),
+		::anno::in_group("Appearance", "Dirt")
+	]],
+	uniform float2 texture_translate = float2(0.f) [[
+		::anno::description("Controls the position of the texture."),
+		::anno::display_name("Texture Translate"),
+		::anno::in_group("Transform")
+	]],
+	uniform float texture_rotate = 0.f [[
+		::anno::description("Rotates angle of the texture in degrees."),
+		::anno::display_name("Texture Rotate"),
+		::anno::in_group("Transform"),
+		::anno::hard_range(-360.f, 360.f)
+	]],
+	uniform float2 texture_scale = float2(1.f) [[
+		::anno::description("Larger numbers increase the size."),
+		::anno::display_name("Texture Scale"),
+		::nvidia::core_definitions::dimension(float2(1.0, 1.0)),
+		::anno::in_group("Transform")
+	]],
+	uniform bool roundcorners_enable = false [[
+		::anno::description("Enables the round corner effect. Comes at a slight performance cost as additional raytracing calls are rquired to evaluate the round corner effect"),
+		::anno::display_name("Enable Round Corners"),
+		::anno::in_group("Round Corners")
+	]],
+	uniform float roundcorners_radius_mm = 1.5f [[
+		::anno::description("Radius of the rounded corners"),
+		::anno::display_name("Round Corner Radius"),
+		::anno::in_group("Round Corners"),
+		::anno::soft_range(0.f, 10.f),
+		::anno::enable_if("roundcorners_enable==true")
+	]],
+	uniform bool roundcorners_across_materials = false [[
+		::anno::description("Applies the round corner effect across different materials when enabled."),
+		::anno::display_name("Across Materials"),
+		::anno::in_group("Round Corners"),
+		::anno::enable_if("roundcorners_enable==true")
+	]],
+	uniform int uv_space_index = 0 [[
+		::anno::description("Uses selected UV space for material"),
+		::anno::display_name("UV Space Index"),
+		::anno::in_group("Advanced")
+	]]
+)
+[[
+	::anno::description("Stucco material with different layers of dirt"),
+	::anno::in_group("Masonry"),
+	::anno::display_name("Stucco"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Stucco.Stucco.png"),
+	::anno::key_words(string[]("stucco", "wall", "facade", "infinite tiling", "construction", "architecture", "exterior", "interior", "smooth",  "white", "light", "neutral")),
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Ruediger Raab"),
+	::anno::contributor("Maik Rohland")
+]]
+ = 
+	let {
+		color[18] palette(color(0.824240, 0.824240, 0.758153), // chalk White
+						color(0.674701, 0.679762, 0.654665), // Winter Gray
+						color(0.684843, 0.664642, 0.620393), // Ash
+						color(0.835547, 0.695067, 0.400636), // Sunrise
+						color(0.610786, 0.493282, 0.356441), // Sand
+						color(0.532409, 0.415995, 0.328536), // Caramel
+						color(0.649708, 0.554853, 0.282671), // Mustard
+						color(0.763545, 0.506143, 0.439627), // Coral
+						color(0.338855, 0.261142, 0.160259), // Madera
+						color(0.207358, 0.179285, 0.138104), // Cocoa
+						color(0.146750, 0.218120, 0.229181), // Petrol
+						color(0.374513, 0.400636, 0.321753), // Mesa Verse
+						color(0.400636, 0.506143, 0.468099), // Eukalyptus
+						color(0.356441, 0.378186, 0.234823), // Sage
+						color(0.231992, 0.229181, 0.215402), // Anthracite
+						color(0.140238, 0.142391, 0.131806), // Graphite
+						color(0.144562, 0.174419, 0.267198), // Ink Blue
+						color(0.489035, 0.554853, 0.654665) // Pigeon Blue
+		);
+		
+		color final_wall_color = use_palette_color ? palette[color_selection] : wall_color;
+		
+		float remapped_rough = ::math::lerp(a: 0.39, b: 0.9, l: reflection_roughness);
+		
+		material_surface tmp1(::df::custom_curve_layer(0.0399999991f, 1.f, 5.f, 1.f, ::df::microfacet_ggx_smith_bsdf(::math::max(::math::max(histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[0], roughness_variation, remapped_rough), histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[1], roughness_variation, remapped_rough)), histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[2], roughness_variation, remapped_rough)) * ::math::max(::math::max(histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[0], roughness_variation, remapped_rough), histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[1], roughness_variation, remapped_rough)), histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[2], roughness_variation, remapped_rough)), ::math::max(::math::max(histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[0], roughness_variation, remapped_rough), histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[1], roughness_variation, remapped_rough)), histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[2], roughness_variation, remapped_rough)) * ::math::max(::math::max(histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[0], roughness_variation, remapped_rough), histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[1], roughness_variation, remapped_rough)), histogram_range((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[2], roughness_variation, remapped_rough)), color(1.f, 1.f, 1.f), ::state::texture_tangent_u(0), ::df::scatter_reflect, ""), ::df::weighted_layer(1.f, ::df::diffuse_reflection_bsdf(nvidia::core_definitions::blend_colors(dirt_color, final_wall_color, ::base::color_layer_blend, nvidia::core_definitions::blend_colors(nvidia::core_definitions::blend_colors(nvidia::core_definitions::blend_colors(color(1.f, 1.f, 1.f), color((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[0]), ::base::color_layer_multiply, dirt_stucco * 0.800000012f).tint, color((float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[1]), ::base::color_layer_multiply, dirt_grunge).tint, color(1.f - (float3(1.f) - float3(infinite_tiling ? endless_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.811999977f, 0.677999973f, 0.893999994f), 4.6500001f, false) : ::base::file_texture(texture_2d("./textures/multi_R_diff_G_grunge_B_deposits.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint))[2]), ::base::color_layer_multiply, dirt_deposits).mono).tint, 0.f, ""), bsdf(), ::base::blend_normals(::base::blend_normals(infinite_tiling ? endless_normal(texture_2d("./textures/stucco_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.497999996f, 0.501999974f, 0.991999984f), 4.6500001f) : ::base::tangent_space_normal_texture(texture_2d("./textures/stucco_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 1.f, 0.f), normal_stucco, infinite_tiling ? endless_normal(texture_2d("./textures/grunge_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.5f, 0.5f, 0.995000005f), 4.6500001f) : ::base::tangent_space_normal_texture(texture_2d("./textures/grunge_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 1.f, 0.f), normal_grunge), 1.f, infinite_tiling ? endless_normal(texture_2d("./textures/deposits_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.5f, 0.5f, 0.996999979f), 4.6500001f) : ::base::tangent_space_normal_texture(texture_2d("./textures/deposits_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 1.f, 0.f), normal_deposits)), ::base::blend_normals(::base::blend_normals(infinite_tiling ? endless_normal(texture_2d("./textures/stucco_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.497999996f, 0.501999974f, 0.991999984f), 4.6500001f) : ::base::tangent_space_normal_texture(texture_2d("./textures/stucco_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 1.f, 0.f), normal_stucco, infinite_tiling ? endless_normal(texture_2d("./textures/grunge_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.5f, 0.5f, 0.995000005f), 4.6500001f) : ::base::tangent_space_normal_texture(texture_2d("./textures/grunge_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 1.f, 0.f), normal_grunge), 1.f, infinite_tiling ? endless_normal(texture_2d("./textures/deposits_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), 3.43999982f, float3(0.5f, 0.5f, 0.996999979f), 4.6500001f) : ::base::tangent_space_normal_texture(texture_2d("./textures/deposits_norm.jpg", ::tex::gamma_linear), 1.f, false, false, vmat_transform(texture_translate, texture_rotate, texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false, 1.f, 0.f), normal_deposits)), material_emission(emission: edf(), intensity: color(0.f, 0.f, 0.f), mode: intensity_radiant_exitance));
+		material_surface tmp2 = material_surface(scattering: bsdf(), emission: material_emission(emission: edf(), intensity: color(0.f, 0.f, 0.f), mode: intensity_radiant_exitance));
+		color tmp3 = color(1.f, 1.f, 1.f);
+		material_volume tmp4 = material_volume(scattering: vdf(), absorption_coefficient: color(0.f, 0.f, 0.f), scattering_coefficient: color(0.f, 0.f, 0.f));
+		material_geometry tmp5(float3(0.f), 1.f, roundcorners_enable ? ::state::rounded_corner_normal(roundcorners_radius_mm * 0.00100000005f, roundcorners_across_materials, 1.f) : ::state::normal());
+	} in
+		material(
+			thin_walled: false,
+			surface: tmp1,
+			backface: tmp2,
+			ior: tmp3,
+			volume: tmp4,
+			geometry: tmp5);
+
+
+export material Stucco_Shiny_Rough(*)
+[[
+	::anno::description("Stucco material with a shiny rough appearance"),
+	::anno::in_group("Masonry"),
+	::anno::display_name("Stucco - Shiny Rough"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Stucco.Stucco_Shiny_Rough.png"),
+	::anno::key_words(string[]("stucco", "wall", "facade", "infinite tiling", "construction", "architecture", "exterior", "interior", "rough", "shiny", "white", "light", "neutral")),
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Ruediger Raab"),
+	::anno::contributor("Maik Rohland")
+]]
+ = Stucco(
+	infinite_tiling: 		true,
+	wall_color:				color(0.823529f),
+	use_palette_color:		false,
+	color_selection:		chalk_white,
+	reflection_roughness: 	0.69f,
+	roughness_variation: 	0.62f,
+	dirt_stucco: 			0.14f,
+	dirt_grunge:			0.02f,
+	dirt_deposits:			0.f,
+	normal_stucco:			0.17f,
+	normal_grunge:			1.0f,
+	normal_deposits:		.53f,
+	dirt_color:				color(0.071761f, 0.044553f, 0.032876f),
+	texture_translate:		float2(0.f),
+	texture_rotate:			0.f ,
+	texture_scale:			float2(1.f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	1.5f,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+export material Stucco_Old_Repainted(*)
+[[
+	::anno::description("Stucco material that has been repainted"),
+	::anno::in_group("Masonry"),
+	::anno::display_name("Stucco - Old Repainted"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Stucco.Stucco_Old_Repainted.png"),
+	::anno::key_words(string[]("stucco", "wall", "facade", "infinite tiling", "construction", "architecture", "exterior", "interior", "old", "rough", "white", "light", "neutral")),
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Ruediger Raab"),
+	::anno::contributor("Maik Rohland")
+]] = Stucco(
+	infinite_tiling: 		true,
+	wall_color:				color(0.823529f),
+	use_palette_color:		false,
+	color_selection:		chalk_white,
+	reflection_roughness: 	0.59f,
+	roughness_variation: 	0.29f,
+	dirt_stucco: 			0.14f,
+	dirt_grunge:			0.02f,
+	dirt_deposits:			0.f,
+	normal_stucco:			0.75f,
+	normal_grunge:			0.70f,
+	normal_deposits:		.53f,
+	dirt_color:				color(0.071761f, 0.044553f, 0.032876f),
+	texture_translate:		float2(0.f),
+	texture_rotate:			0.f ,
+	texture_scale:			float2(1.f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	1.5f,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+export material Stucco_Subtle_Dirt(*)
+[[
+	::anno::description("Stucco material with a subtle dirt layer"),
+	::anno::in_group("Masonry"),
+	::anno::display_name("Stucco - Subtle Dirt"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Stucco.Stucco_Subtle_Dirt.png"),
+	::anno::key_words(string[]("stucco", "wall", "facade", "infinite tiling", "construction", "architecture", "exterior", "interior", "smooth", "white", "dirt", "grunge", "old", "light", "neutral")),
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Ruediger Raab"),
+	::anno::contributor("Maik Rohland")
+]] = Stucco(
+	infinite_tiling: 		true,
+	wall_color:				color(0.823529f),
+	use_palette_color:		false,
+	color_selection:		chalk_white,
+	reflection_roughness: 	0.5f,
+	roughness_variation: 	0.22f,
+	dirt_stucco: 			0.12f,
+	dirt_grunge:			0.099f,
+	dirt_deposits:			0.12f,
+	normal_stucco:			0.07f,
+	normal_grunge:			0.25f,
+	normal_deposits:		0.46f,
+	dirt_color:				color(0.071761f, 0.044553f, 0.032876f),
+	texture_translate:		float2(0.f),
+	texture_rotate:			0.f ,
+	texture_scale:			float2(1.f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	1.5f,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+export material Stucco_Slight_Dirt(*)
+[[
+	::anno::description("Stucco material with a light dirt layer"),
+	::anno::in_group("Masonry"),
+	::anno::display_name("Stucco - Slight Dirt"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Stucco.Stucco_Slight_Dirt.png"),
+	::anno::key_words(string[]("stucco", "wall", "facade", "infinite tiling", "construction", "architecture", "exterior", "interior", "smooth", "white", "dirt", "grunge", "old", "light", "neutral")),
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Ruediger Raab"),
+	::anno::contributor("Maik Rohland")
+]] = Stucco(
+	infinite_tiling: 		true,
+	wall_color:				color(0.823529f),
+	use_palette_color:		false,
+	color_selection:		chalk_white,
+	reflection_roughness: 	0.55f,
+	roughness_variation: 	0.42f,
+	dirt_stucco: 			0.2f,
+	dirt_grunge:			0.19f,
+	dirt_deposits:			0.46f,
+	normal_stucco:			0.07f,
+	normal_grunge:			0.25f,
+	normal_deposits:		0.46f,
+	dirt_color:				color(0.071761f, 0.044553f, 0.032876f),
+	texture_translate:		float2(0.f),
+	texture_rotate:			0.f ,
+	texture_scale:			float2(1.f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	1.5f,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);
+
+
+
+export material Stucco_Dirty(*)
+[[
+	::anno::description("Stucco material with a light dirt layer"),
+	::anno::in_group("Masonry"),
+	::anno::display_name("Stucco - Dirty"),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Stucco.Stucco_Dirty.png"),
+	::anno::key_words(string[]("stucco", "wall", "facade", "infinite tiling", "construction", "architecture", "exterior", "interior", "smooth", "white", "dirt", "grunge", "old")),
+	::anno::author("NVIDIA vMaterials"),
+	::anno::contributor("Ruediger Raab"),
+	::anno::contributor("Maik Rohland")
+]] = Stucco(
+	infinite_tiling: 		true,
+	wall_color:				color(0.823529f),
+	use_palette_color:		false,
+	color_selection:		chalk_white,
+	reflection_roughness: 	0.81f,
+	roughness_variation: 	0.71f,
+	dirt_stucco: 			0.36f,
+	dirt_grunge:			0.53f,
+	dirt_deposits:			0.53f,
+	normal_stucco:			0.44f,
+	normal_grunge:			0.2f,
+	normal_deposits:		1.0f,
+	dirt_color:				color(0.071761f, 0.044553f, 0.032876f),
+	texture_translate:		float2(0.f),
+	texture_rotate:			0.f ,
+	texture_scale:			float2(1.f),
+	roundcorners_enable:	false,
+	roundcorners_radius_mm:	1.5f,
+	roundcorners_across_materials: false,
+	uv_space_index:			0
+);

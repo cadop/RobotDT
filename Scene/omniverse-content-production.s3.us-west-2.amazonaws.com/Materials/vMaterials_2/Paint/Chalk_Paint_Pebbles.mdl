@@ -1,0 +1,802 @@
+/******************************************************************************
+ *	 Copyright 2023 NVIDIA Corporation. All rights reserved.	 *
+ ******************************************************************************
+ 
+Permission is hereby granted by NVIDIA Corporation ("NVIDIA"), free of charge,
+to any person obtaining a copy of the sample definition code that uses our 
+Material Definition Language (the "MDL Materials"), to reproduce and distribute
+the MDL Materials, including without limitation the rights to use, copy, merge,
+publish, distribute, and sell modified and unmodified copies of the MDL 
+Materials, and to permit persons to whom the MDL Materials is furnished to do
+so, in all cases solely for use with NVIDIA's Material Definition Language,
+subject to the following further conditions:
+
+1. The above copyright notices, this list of conditions, and the disclaimer
+that follows shall be retained in all copies of one or more of the MDL
+Materials, including in any software with which the MDL Materials are bundled,
+redistributed, and/or sold, and included either as stand-alone text files,
+human-readable headers or in the appropriate machine-readable metadata fields
+within text or binary files as long as those fields can be easily viewed by the
+user, as applicable.
+2. The name of NVIDIA shall not be used to promote, endorse or advertise any 
+Modified Version without specific prior written permission, except a) to comply
+ with the notice requirements otherwise contained herein; or b) to acknowledge
+the contribution(s) of NVIDIA.
+
+THE MDL MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF COPYRIGHT, PATENT,
+TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL NVIDIA CORPORATION BE LIABLE FOR 
+ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY GENERAL, SPECIAL, 
+INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN AN ACTION OF 
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR INABILITY TO USE
+THE MDL MATERIALS OR FROM OTHER DEALINGS IN THE MDL MATERIALS.
+*/
+
+
+mdl 1.4;
+
+import ::anno::*;
+import ::base::*;
+import ::df::*;
+import ::math::*;
+import ::state::*;
+import ::tex::*;
+import ::nvidia::core_definitions::dimension;
+import ::nvidia::core_definitions::blend_colors;
+
+
+const string COPYRIGHT = 
+" Copyright 2023 NVIDIA Corporation. All rights reserved.\n"
+" MDL MATERIALS ARE PROVIDED PURSUANT TO AN END USER LICENSE  AGREEMENT,\n"
+" WHICH WAS ACCEPTED IN ORDER TO GAIN ACCESS TO THIS FILE.  IN PARTICULAR,\n" 
+" THE MDL MATERIALS ARE PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\n"
+" EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\n"
+" MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF\n" 
+" COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL NVIDIA\n"
+" CORPORATION BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY\n"
+" GENERAL, SPECIAL,  INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN\n"
+" AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR\n"
+" INABILITY TO USE THE MDL MATERIALS OR FROM OTHER DEALINGS IN THE MDL MATERIALS.\n";
+
+const string DESCRIPTION = 
+"A diffuse chalk paint material with a slightly glossy sheen, evenly applied with a bumpy look and feel";
+
+
+float remap_xy_to_0_1(float input, float x, float y)
+{
+	return (input - x)/(y - x);
+}
+
+float histogram_scan_big(float input, float width, float position)
+{
+	return ::math::clamp(
+				remap_xy_to_0_1(input,
+					::math::lerp(-width, 1.0, position),
+					::math::lerp(0.0, 1.0 + width, position)),
+				0.0,
+				1.0);
+}
+
+::base::texture_coordinate_info vmat_transform(
+								uniform float2 translation = float2(0.0, 0.0),
+								uniform float rotation	 = 0.0,
+								uniform float2 scaling	 = float2(1.0, 1.0),
+								uniform ::base::texture_coordinate_system system = ::base::texture_coordinate_uvw,
+								uniform int uv_space	   = 0
+)
+{
+	float rotation_rad = (rotation * 3.1415926535897932384626433832f) / 180.f;
+	
+	float4x4 scale =
+	float4x4(1.0 /scaling.x, 0.			 ,  0. ,	 0.,
+			 0.			, 1.0 /scaling.y ,  0. ,	 0.,
+			 0.			, 0.			 ,  1.0,	 0.,
+			 translation.x , translation.y  ,  0.0,	 1.);
+
+	float s = ::math::sin(rotation_rad);
+	float c = ::math::cos(rotation_rad);
+	float4x4 rotate =
+	float4x4(  c  ,  -s   , 0.0 , 0.0,
+			   s  ,   c   , 0.0 , 0.0,
+			   0.0,   0.0 , 1.0 , 0.0,
+			   0. ,   0.0 , 0.0 , 1.);
+	
+	return ::base::transform_coordinate(scale*rotate, ::base::coordinate_source(system, uv_space));
+}
+
+
+float uint2float(int x)
+{
+	return float(x & 0x7FFFFFFF) + (x < 0 ? 2147483648.0 : 0.0);
+}
+
+int lowbias32(int x)
+{
+	x ^= x >>> 16;
+	x *= 0x7feb352d;
+	x ^= x >>> 15;
+	x *= 0x846ca68b;
+	x ^= x >>> 16;
+	return x;
+}
+
+float2 rnd22(int2 p) {
+	float2 ret_val = float2(
+		uint2float(lowbias32(p[0] + lowbias32(p[1]))) / 4294967296.f,
+		uint2float(lowbias32(p[0] + 32000 + lowbias32(p[1]))) / 4294967296.f
+	);
+	return ret_val;
+}	
+
+float3 srgb2rgb(float3 val)
+{
+	return ::math::pow(::math::max(val, float3(0.0f)), 2.2);
+}
+
+float2x2 invert_2x2(float2x2 M)
+{
+	float det = M[0][0]*M[1][1] - M[0][1]*M[1][0];
+	//https://www.chilimath.com/lessons/advanced-algebra/inverse-of-a-2x2-matrix/
+	return (1.0 / det) * float2x2(M[1][1], -M[0][1], -M[1][0], M[0][0]);
+}
+
+float3 nonrepeat_lookup(
+	uniform texture_2d texture = texture_2d(),
+	::base::texture_coordinate_info uvw = ::base::coordinate_source(),
+	float texture_scale = 1.0,
+	float3 average_color = float3(0.5),
+	float patch_size = 8.0
+)
+{
+	
+	float2 uv_in = float2(uvw.position[0], uvw.position[1]) * texture_scale;
+	float Z =  patch_size;	 // patch scale inside example texture
+	float CON = 1.0f;
+	
+	float3 O = float3(0.f);
+	float2x2 M0 = float2x2(1.f,0.f, 0.5f, ::math::sqrt(3.f)/2.f);
+	float2x2 M = invert_2x2(M0); // transform matrix <-> tilted space
+	
+	float2 U = uv_in;
+	float2 V = M * uv_in; //pre-tilted hexa coordinates
+	int2 I = int2(::math::floor(V)); // hexa-tile id
+	
+	// The mean color needs to be determined in Photoshop then to make the
+	// average color work out, take the float value and calculate the apropriate
+	// mean value as (value^(1/2.2))
+
+	float3 m = average_color;
+	
+	float3 F = float3(::math::frac(V)[0], ::math::frac(V)[1], 0.f), W;
+	F[2] = 1.0 - F[0] - F[1]; // local hexa coordinates
+	
+	if( F[2] > 0.f )
+
+		O = (W[0] = F[2]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I))) - m*float(CON))
+		  + (W[1] = F[1]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(0,1)))) - m*float(CON))
+		  + (W[2] = F[0]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(1,0)))) - m*float(CON));
+	else
+		O = (W[0] =	  -F[2]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(1))))   - m*float(CON))
+		  + (W[1] = 1.f - F[1]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(1, 0)))) - m*float(CON))
+		  + (W[2] = 1.f - F[0]) * (( ::tex::lookup_float3(texture, U/Z-rnd22(I+int2(0, 1)))) - m*float(CON));
+	O = m + O/::math::length(W);
+	O = ::math::clamp( (O), 0.0, 1.0);
+	
+	return float3(O);
+}
+
+color endless_texture(
+	uniform texture_2d texture = texture_2d(),
+	::base::texture_coordinate_info uvw = ::base::coordinate_source(),
+	float texture_scale = 10.0,
+	float3 average_color = float3(0.5, 0.5, 1.0),
+	float patch_size = 8.0,
+	bool gamma_correct_lookup = true
+)
+{
+	return gamma_correct_lookup ? color(srgb2rgb(
+			nonrepeat_lookup (
+				texture: texture,
+				uvw: uvw,
+				texture_scale: texture_scale,
+				average_color: average_color,
+				patch_size: patch_size
+			))
+		) : color(nonrepeat_lookup (
+			texture: texture,
+			uvw: uvw,
+			texture_scale: texture_scale,
+			average_color: average_color,
+			patch_size: patch_size
+		));
+}
+
+float3 endless_normal(
+	uniform texture_2d texture = texture_2d(),
+	float factor = 1.0,
+	bool flip_tangent_u = false,
+	bool flip_tangent_v = false,
+	::base::texture_coordinate_info uvw = ::base::coordinate_source(),
+	float texture_scale = 1.0,
+	float3 average_color = float3(0.5, 0.5, 1.0),
+	float patch_size = 8.0
+)
+{
+	float3 transformed_tangent_u = flip_tangent_u ? uvw.tangent_u : - uvw.tangent_u;
+	float3 transformed_tangent_v = flip_tangent_v ? uvw.tangent_v : - uvw.tangent_v;
+	
+	if (flip_tangent_u)
+		transformed_tangent_u=-transformed_tangent_u;
+	if (flip_tangent_v)
+		transformed_tangent_v=-transformed_tangent_v;
+
+	// normalized Lookup
+	float3 tangent_space_normal =
+		 (nonrepeat_lookup (
+			texture: texture,
+			uvw: uvw,
+			texture_scale: texture_scale,
+			average_color: average_color,
+			patch_size: patch_size
+		) - 0.5) * (2.0 * factor);
+		
+	 return ::math::normalize(uvw.tangent_u * tangent_space_normal.x +
+		  uvw.tangent_v * tangent_space_normal.y +
+		  ::state::normal()*1.0); 
+}
+
+float3 normalmap_normal(
+	uniform texture_2d texture,
+	float factor = 1.0,
+	::base::texture_coordinate_info uvw = ::base::texture_coordinate_info()
+)
+{
+	float3 lookup = (::tex::lookup_float3(texture, float2(uvw.position.x, uvw.position.y)) - 0.5) * (factor * 2.0);
+	return ::math::normalize(uvw.tangent_u * lookup.x + uvw.tangent_v * lookup.y + ::state::normal());
+}
+
+export material Chalk_Paint_Pebbles(
+	uniform bool infinite_tiling = true [[
+		::anno::description("Enables infinite tiling feature which removes repeating texture patterns. Note that depending on the material this feature changes the appearance of the material slightly."),
+		::anno::in_group("Appearance")
+	]],
+	float patch_size = 0.9f [[
+		::anno::description("Determines the size of the sampled area in the texture. Larger values sample smaller areas, resulting in a more fragmented look of the source texture. Tweak the value so that the appearance of the infinite tiling looks good to you."),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f)
+	]],
+	color paint_color = color(0.1042f, 0.32314f, 0.031327f) [[
+		::anno::description("Sets the diffuse color of the paint material"),
+		::anno::in_group("Appearance")
+	]],
+	float paint_brightness = 0.737f [[
+		::anno::description("Adjusts the brightness of the paint"),
+		::anno::display_name("Paint Brightness"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f)
+	]],
+	float paint_roughness = 0.9f [[
+		::anno::description("Higher roughness values lead to bigger highlights and blurrier reflections."),
+		::anno::display_name("Paint Roughness"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f)
+	]],
+	float bump_strength = 1.f [[
+		::anno::description("Specifies the strength of the bump."),
+		::anno::display_name("Bump Strength"),
+		::anno::in_group("Appearance"),
+		::anno::hard_range(0.f, 1.f)
+	]],
+	uniform float2 texture_translate = float2(0.f) [[
+		::anno::description("Controls the position of the texture."),
+		::anno::display_name("Translate"),
+		::anno::in_group("Transform")
+	]],
+	uniform float texture_rotate = 0.f [[
+		::anno::description("Rotates angle of the texture in degrees."),
+		::anno::display_name("Rotate"),
+		::anno::in_group("Transform")
+	]],
+	uniform float2 texture_scale = float2(1.f) [[
+		::anno::description("Larger numbers increase the size."),
+		::anno::display_name("Scale"),
+		::nvidia::core_definitions::dimension(float2(1.0, 1.0)),
+		::anno::in_group("Transform")
+	]],
+	uniform int uv_space_index = 0 [[
+		::anno::description("Use selected UV space for material"),
+		::anno::display_name("UV Space Index"),
+		::anno::in_group("Advanced")
+	]]
+)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Extra White"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "white", "light", "neutral"))
+]]
+ = 
+	let {
+		bool tmp0 = false;
+		float2 corrected_texture_scale = texture_scale * 0.5;
+		
+		material_surface tmp1(
+			::df::custom_curve_layer(0.02f, 1.f, 5.f, histogram_scan_big(float3(infinite_tiling ? endless_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), ::math::lerp(60.f, 0.1f, patch_size), float3(0.824000001f, 0.50999999f, 0.501999974f), ::math::lerp(60.f, 0.1f, patch_size), true) : ::base::file_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint)[2], 0.266000003f, 0.180000007f), ::df::microfacet_beckmann_smith_bsdf(histogram_scan_big(float3(infinite_tiling ? endless_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), ::math::lerp(60.f, 0.1f, patch_size), float3(0.824000001f, 0.51f, 0.502f), ::math::lerp(60.f, 0.1f, patch_size), true) : ::base::file_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint)[1] * float3(infinite_tiling ? endless_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), ::math::lerp(60.f, 0.1f, patch_size), float3(0.824000001f, 0.50999999f, 0.501999974f), ::math::lerp(60.f, 0.1f, patch_size), true) : ::base::file_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint)[1], 0.985000074f, ::math::lerp(0.36f, 0.09f, paint_roughness)), histogram_scan_big(float3(infinite_tiling ? endless_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), ::math::lerp(60.f, 0.1f, patch_size), float3(0.824000001f, 0.50999999f, 0.501999974f), ::math::lerp(60.f, 0.1f, patch_size), true) : ::base::file_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint)[1] * float3(infinite_tiling ? endless_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), ::math::lerp(60.f, 0.1f, patch_size), float3(0.824000001f, 0.50999999f, 0.501999974f), ::math::lerp(60.f, 0.1f, patch_size), true) : ::base::file_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint)[1], 0.985000074f, ::math::lerp(0.36f, 0.09f, paint_roughness)), color(1.f, 1.f, 1.f), ::state::texture_tangent_u(0), ::df::scatter_reflect, ""), ::df::diffuse_reflection_bsdf(::nvidia::core_definitions::blend_colors(::nvidia::core_definitions::blend_colors(paint_color, color(float3(infinite_tiling ? endless_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), ::math::lerp(60.f, 0.1f, patch_size), float3(0.824000001f, 0.50999999f, 0.501999974f), ::math::lerp(60.f, 0.1f, patch_size), true) : ::base::file_texture(texture_2d("./textures/Chalk_Paint_Pebbles_multi_R_diff_G_rough_B_height.jpg", ::tex::gamma_linear), color(0.f, 0.f, 0.f), color(1.f, 1.f, 1.f), ::base::mono_alpha, vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), float2(0.f, 1.f), float2(0.f, 1.f), ::tex::wrap_repeat, ::tex::wrap_repeat, false).tint)[0]), ::base::color_layer_multiply, 0.8f).tint, color(0.f, 0.f, 0.f), ::base::color_layer_multiply, ::math::lerp(0.400000006f, 0.f, paint_brightness)).tint, 0.f, ""), ::state::normal()),
+			material_emission(emission: edf(), intensity: color(0.f, 0.f, 0.f), mode: intensity_radiant_exitance));
+		material_surface tmp2 = material_surface(scattering: bsdf(), emission: material_emission(emission: edf(), intensity: color(0.f, 0.f, 0.f), mode: intensity_radiant_exitance));
+		color tmp3 = color(1.f, 1.f, 1.f);
+		material_volume tmp4 = material_volume(scattering: vdf(), absorption_coefficient: color(0.f, 0.f, 0.f), scattering_coefficient: color(0.f, 0.f, 0.f));
+		material_geometry tmp5(
+			float3(0.f),
+			1.f,
+			infinite_tiling ? endless_normal(texture_2d("./textures/Chalk_Paint_Pebbles_norm.jpg", ::tex::gamma_linear), bump_strength, false, false, vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index), ::math::lerp(60.f, 0.1f, patch_size), float3(0.5f, 0.5f, 1.f), ::math::lerp(60.f, 0.1f, patch_size)) : normalmap_normal(texture_2d("./textures/Chalk_Paint_Pebbles_norm.jpg", ::tex::gamma_linear), bump_strength, vmat_transform(texture_translate, texture_rotate, corrected_texture_scale, ::base::texture_coordinate_uvw, uv_space_index)));
+	} in
+		material(
+			thin_walled: tmp0,
+			surface: tmp1,
+			backface: tmp2,
+			ior: tmp3,
+			volume: tmp4,
+			geometry: tmp5);
+
+
+
+export material Chalk_Paint_Pebbles_Origami(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Origami"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Origami.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "white", "light", "neutral", "desaturated"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.684843f, 0.684843f, 0.634958f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Rose_Ash(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Rose Ash"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Rose_Ash.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "rose", "pink", "light", "warm", "desaturated"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.684843f, 0.664642f, 0.620393f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Moonlight(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Moonlight"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Moonlight.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "light", "neutral"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.674701f, 0.674701f, 0.674701f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Elation(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Elation"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Elation.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "lilac", "light", "desaturated"))
+]]
+= Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.664642f, 0.659643f, 0.700210f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Misty(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Misty"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Misty.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "green", "light", "desaturated"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.568561f, 0.610786f, 0.596528f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Moonstone(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Moonstone"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Moonstone.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "gray", "neutral"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.506143f, 0.510471f, 0.489035f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Roses(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Roses"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Roses.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "rose", "red", "light", "desaturated"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.644771f, 0.506143f, 0.472246f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+
+
+export material Chalk_Paint_Pebbles_Felted_Wool(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Felted Wool"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Felted_Wool.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "brown", "desaturated"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.356441f, 0.331956f, 0.279539f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Bark(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Bark"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Bark.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "brown"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.215402f, 0.204714f, 0.174419f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Morning_Dew(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Morning Dew"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Morning_Dew.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "green", "desturated"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.292183f, 0.370860f, 0.349348f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+
+export material Chalk_Paint_Pebbles_Contemplation(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Contemplation"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Contemplation.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "teal", "cool", "desaturated"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.210021f, 0.288993f, 0.311724f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Distance(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Distance"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Distance.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "blue", "cool", "desaturated"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.174419f, 0.231992f, 0.273331f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Deep_Emerald(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Deep Emerald"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Deep_Emerald.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "blue", "cool", "dark"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.077511f, 0.160259f, 0.176843f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Night_Watch(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Night Watch"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Night_Watch.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "dark", "blue", "desaturated"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.106357f, 0.151181f, 0.146750f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Wine(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Wine"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Wine.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "red", "dark", "warm", "desaturated"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.212702f, 0.129743f, 0.144562f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Black_Bean(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Black Bean"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Black_Bean.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "brown", "dark"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.117733f, 0.097356f, 0.090467f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Dark_Forest(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Dark Forest"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Dark_Forest.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "gray", "dark", "neutral"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.123658f, 0.140238f, 0.146750f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Charcoal_Blue(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Charcoal Blue"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Charcoal_Blue.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "charcoal", "cool", "dark"))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.111966f, 0.123658f, 0.148957f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
+
+
+
+export material Chalk_Paint_Pebbles_Summernight(*)
+[[
+	::anno::author("NVIDIA vMaterials"),
+	::anno::display_name("Chalk Paint Pebbles - Summernight"),
+	::anno::description(DESCRIPTION),
+	::anno::copyright_notice(COPYRIGHT),
+	::anno::thumbnail("./.thumbs/Chalk_Paint_Pebbles.Chalk_Paint_Pebbles_Summernight.png"),
+	::anno::key_words(string[]("paint", "chalk", "wall", "bumped", "rough", "design", "new", "infinite tiling", "architecture", "decorative", "blue", "dark", "desaturated" ))
+]]
+ = Chalk_Paint_Pebbles(
+	infinite_tiling: 	true,
+	patch_size: 		0.9f,
+	paint_color:		color(0.069965f, 0.102704f, 0.115793f),
+	paint_brightness:	0.7f,
+	paint_roughness:	0.9f,
+	bump_strength:		0.7f,
+	texture_translate:	float2(0.f),
+	texture_rotate:		0.f,
+	texture_scale:		float2(1.0f),
+	uv_space_index:		0
+);
